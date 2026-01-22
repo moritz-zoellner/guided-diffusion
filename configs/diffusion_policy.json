@@ -1,7 +1,7 @@
 {
     "algo_name": "diffusion_policy",
     "experiment": {
-        "name": "test",
+        "name": null,
         "validate": false,
         "logging": {
             "terminal_output_to_txt": true,
@@ -38,8 +38,8 @@
         "ckpt_path": null
     },
     "train": {
-        "data": "/home/mzoellner/Projects/research/guided-diffusion/data/transport/ph/low_dim_v15.hdf5",
-        "output_dir": "/home/mzoellner/Projects/research/guided-diffusion/runs/diffusion_policy_transport_trained_models",
+        "data": "/home/zoellner/src/guided-diffusion/data/transport/ph/low_dim_v15.hdf5",
+        "output_dir": "/home/zoellner/src/guided-diffusion/runs/diffusion_policy_transport_trained_models",
         "normalize_weights_by_ds_size": false,
         "num_data_workers": 0,
         "hdf5_cache_mode": "all",

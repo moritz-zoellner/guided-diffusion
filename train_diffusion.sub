@@ -1,0 +1,15 @@
+#!/bin/sh
+#SBATCH -J humanoid_expert
+#SBATCH -A rpaleja
+#SBATCH -p a100-40gb
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=32G
+#SBATCH -t 24:00:00
+#SBATCH -o slurm-%j.out
+
+module load conda
+conda activate /scratch/gilbreth/zoellner/conda/envs/guided_diffusion
+
+echo "Starting diffusion policy training via SLURM"
+python robomimic/robomimic/scripts/train.py --config configs/diffusion_policy.json --name first_gpu_full_run
+echo "Finished training?" 
