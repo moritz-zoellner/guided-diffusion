@@ -23,14 +23,14 @@
         "env": null,
         "additional_envs": null,
         "render": false,
-        "render_video": true,
+        "render_video": false,
         "keep_all_videos": false,
-        "video_skip": 5,
+        "video_skip": 20,
         "rollout": {
             "enabled": true,
-            "n": 50,
-            "horizon": 1000,
-            "rate": 50,
+            "n": 20,
+            "horizon": 700,
+            "rate": 100,
             "warmstart": 0,
             "terminate_on_success": true
         },
@@ -39,7 +39,7 @@
     },
     "train": {
         "data": "/home/zoellner/src/guided-diffusion/data/transport/ph/low_dim_v15.hdf5",
-        "output_dir": "/home/zoellner/src/guided-diffusion/runs/diffusion_policy_transport_trained_models",
+        "output_dir": "/scratch/gilbreth/zoellner/diffusion_runs/",
         "normalize_weights_by_ds_size": false,
         "num_data_workers": 0,
         "hdf5_cache_mode": "all",
@@ -68,7 +68,7 @@
         "goal_mode": null,
         "cuda": true,
         "batch_size": 100,
-        "num_epochs": 2000,
+        "num_epochs": 1000,
         "seed": 1,
         "max_grad_norm": null
     },
