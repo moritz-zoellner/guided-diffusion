@@ -9,6 +9,7 @@ from robomimic.utils import obs_utils as ObsUtils
 from robomimic.utils import env_utils as EnvUtils
 
 from robomimic.envs.env_base import EnvBase
+from robomimic.envs.wrappers import EnvWrapper
 from robomimic.algo import RolloutPolicy
 from copy import deepcopy
 
