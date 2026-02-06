@@ -149,7 +149,7 @@ def run_diffusion(args):
 
     stats_path = os.path.join(run_output_path, "rollout_stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
-        json.dump(_to_jsonable(all_stats), f, indent=2)
+        json.dump(all_stats, f, indent=2)
 
     if video_dir is not None:
         print(
