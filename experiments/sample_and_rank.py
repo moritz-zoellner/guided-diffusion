@@ -4,6 +4,7 @@ import os
 import imageio
 import numpy as np
 import torch
+from copy import deepcopy
 
 from robomimic.utils import file_utils as FileUtils
 from robomimic.utils import obs_utils as ObsUtils
@@ -31,7 +32,7 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
     Returns:
         stats (dict): some statistics for the rollout - such as return, horizon, and task success
     """
-    
+
     assert isinstance(env, EnvBase) or isinstance(env, EnvWrapper)
     assert isinstance(policy, RolloutPolicy)
     assert not (render and (video_writer is not None))
@@ -45,15 +46,10 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
     results = {}
     video_count = 0  # video frame counter
     total_reward = 0.
-    
-    payload_pos_seq = np.zeros((horizon,3), dtype=np.float32)
-    payload_body_seq = np.zeros((horizon,3,3), dtype=np.float32)
 
     try:
         for step_i in range(horizon):
 
-            print(step_i)
-            print(obs.keys())
             # get action from policy
             act = policy(ob=obs)
 
@@ -63,12 +59,6 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
             # compute reward
             total_reward += r
             success = env.is_success()["task"]
-
-            sim = env.env.env.sim            
-            R = sim.data.body_xmat[bid].reshape(3,3)
-            payload_pos_seq[step_i] = sim.data.body_xpos[bid]
-            payload_body_seq[step_i] = R
-
 
             # visualization
             if render:
@@ -93,7 +83,7 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
     except env.rollout_exceptions as e:
         print("WARNING: got rollout exception {}".format(e))
 
-    stats = dict(Return=total_reward, Horizon=(step_i + 1), Success_Rate=float(success), Pos_Seq=payload_pos_seq, Upz_Seq=payload_body_seq)
+    stats = dict(Return=total_reward, Horizon=(step_i + 1), Success_Rate=float(success))
 
     return stats
 
@@ -129,6 +119,7 @@ def run_diffusion(args):
     )
 
     video_writer = None
+    video_path = None
     if args.record_video == "y":
         video_dir = os.path.join(args.output_path, "video")
         os.makedirs(video_dir, exist_ok=True)
@@ -136,9 +127,8 @@ def run_diffusion(args):
         video_writer = imageio.get_writer(video_path, fps=20)
 
     all_stats = []
-    all_trajs = []
-    for _ in range(args.n_rollouts):
-        stats, traj = rollout(
+    for rollout_i in range(args.n_rollouts):
+        stats = rollout(
             policy=policy,
             env=env,
             horizon=args.horizon,
@@ -147,7 +137,7 @@ def run_diffusion(args):
             camera_names=args.camera_names,
         )
         all_stats.append(stats)
-        all_trajs.append(traj)
+        print(f"[rollout {rollout_i + 1}/{args.n_rollouts}] stats: {stats}")
 
     if video_writer is not None:
         video_writer.close()
@@ -155,6 +145,13 @@ def run_diffusion(args):
     stats_path = os.path.join(args.output_path, "rollout_stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(_to_jsonable(all_stats), f, indent=2)
+
+    if video_path is not None:
+        print(
+            f"Completed {args.n_rollouts} rollouts. Outputs: stats={stats_path}, video={video_path}"
+        )
+    else:
+        print(f"Completed {args.n_rollouts} rollouts. Outputs: stats={stats_path}")
 
 
 CKPT_PATH = "./models/model_epoch_1100_low_dim_v15_success_0.7.pth"  # <-- change
