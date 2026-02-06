@@ -1,5 +1,3 @@
-robomimic/
-robosuite/
 __pycache__/
 *.pyc
 wandb/
@@ -7,3 +5,5 @@ data/
 logs/
 outputs/
 runs/
+models/
+videos/
