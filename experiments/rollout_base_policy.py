@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from datetime import datetime
 import imageio
 import numpy as np
 import torch
@@ -15,6 +16,10 @@ from robomimic.envs.env_base import EnvBase
 from robomimic.envs.wrappers import EnvWrapper
 from robomimic.algo import RolloutPolicy
 
+def get_Rzz(env):
+    sim = env.env.env.sim
+    bid = sim.model.body_name2id("payload_root")
+    return sim.data.body_xmat[bid].reshape(3,3)[2,2]
 
 def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=['agentview'], render=False):
     """
@@ -47,6 +52,8 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
     video_count = 0  # video frame counter
     total_reward = 0.
 
+    Rzz = []
+
     try:
         for step_i in range(horizon):
 
@@ -56,6 +63,7 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
             # play action
             next_obs, r, done, _ = env.step(act)
 
+            Rzz.append(get_Rzz(env))
             # compute reward
             total_reward += r
             success = env.is_success()["task"]
@@ -83,28 +91,20 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
     except env.rollout_exceptions as e:
         print("WARNING: got rollout exception {}".format(e))
 
-    stats = dict(Return=total_reward, Horizon=(step_i + 1), Success_Rate=float(success))
+    stats = dict(
+        Return=total_reward, 
+        Horizon=(step_i + 1), 
+        Success_Rate=float(success),
+        Rzz_List=Rzz
+    )
 
     return stats
 
-
-def _to_jsonable(value):
-    if isinstance(value, dict):
-        return {k: _to_jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_to_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (np.integer, np.floating)):
-        return value.item()
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu().tolist()
-    return value
-
-
 def run_diffusion(args):
     device = TorchUtils.get_torch_device(try_to_use_cuda=True)
-    os.makedirs(args.output_path, exist_ok=True)
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_output_path = os.path.join(args.output_path, run_id)
+    os.makedirs(run_output_path, exist_ok=True)
 
     env, _ = FileUtils.env_from_checkpoint(
         ckpt_path=args.ckpt_path,
@@ -118,16 +118,22 @@ def run_diffusion(args):
         verbose=True,
     )
 
-    video_writer = None
-    video_path = None
+    video_dir = None
     if args.record_video == "y":
-        video_dir = os.path.join(args.output_path, "video")
+        video_dir = os.path.join(run_output_path, "video")
         os.makedirs(video_dir, exist_ok=True)
-        video_path = os.path.join(video_dir, args.video_name)
-        video_writer = imageio.get_writer(video_path, fps=20)
 
     all_stats = []
     for rollout_i in range(args.n_rollouts):
+        rollout_num = rollout_i + 1
+        video_writer = None
+        if (
+            args.record_video == "y"
+            and rollout_num % args.n_step_rollout_video == 0
+        ):
+            video_path = os.path.join(video_dir, f"rollout_{rollout_num}.mp4")
+            video_writer = imageio.get_writer(video_path, fps=20)
+
         stats = rollout(
             policy=policy,
             env=env,
@@ -137,39 +143,37 @@ def run_diffusion(args):
             camera_names=args.camera_names,
         )
         all_stats.append(stats)
-        print(f"[rollout {rollout_i + 1}/{args.n_rollouts}] stats: {stats}")
+        if video_writer is not None:
+            video_writer.close()
+        print(f"[rollout {rollout_num}/{args.n_rollouts}] stats: {stats}")
 
-    if video_writer is not None:
-        video_writer.close()
-
-    stats_path = os.path.join(args.output_path, "rollout_stats.json")
+    stats_path = os.path.join(run_output_path, "rollout_stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(_to_jsonable(all_stats), f, indent=2)
 
-    if video_path is not None:
+    if video_dir is not None:
         print(
-            f"Completed {args.n_rollouts} rollouts. Outputs: stats={stats_path}, video={video_path}"
+            f"Completed {args.n_rollouts} rollouts. Outputs: stats={stats_path}, "
+            f"videos={video_dir}, run_dir={run_output_path}"
         )
     else:
-        print(f"Completed {args.n_rollouts} rollouts. Outputs: stats={stats_path}")
+        print(
+            f"Completed {args.n_rollouts} rollouts. Outputs: stats={stats_path}, run_dir={run_output_path}"
+        )
 
 
 CKPT_PATH = "./models/model_epoch_1100_low_dim_v15_success_0.7.pth"  # <-- change
 OUTPUT_PATH = "./outputs/sr_rollout"
-VIDEO_SKIP = 30
-CAMERA_NAMES = ["agentview"]
-VIDEO_NAME = "rollout.mp4"
-
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_samples", type=int, default=16)
     parser.add_argument("--horizon", type=int, default=700)
     parser.add_argument("--n_rollouts", type=int, default=1)
+    parser.add_argument("--n_step_rollout_video", type=int, default=10)
     parser.add_argument("--record_video", type=str, choices=["y", "n"], default="y")
-    parser.add_argument("--video_skip", type=int, default=VIDEO_SKIP)
-    parser.add_argument("--video_name", type=str, default=VIDEO_NAME)
-    parser.add_argument("--camera_names", nargs="+", default=CAMERA_NAMES)
+    parser.add_argument("--video_skip", type=int, default=1)
+    parser.add_argument("--camera_names", nargs="+", default=["agentview"])
     parser.add_argument("--output_path", type=str, default=OUTPUT_PATH)
     parser.add_argument("--ckpt_path", type=str, default=CKPT_PATH)
     args = parser.parse_args()
