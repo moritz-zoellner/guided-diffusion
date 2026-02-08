@@ -293,6 +293,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # self.obs_queue.extend([obs_dict] * n_repeats)
         
         if len(self.action_queue) == 0:
+            raise ValueError # should never go here
             # no actions left, run inference
             # turn obs_queue into dict of tensors (concat at T dim)
             # import pdb; pdb.set_trace()
@@ -313,6 +314,78 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # [1,Da]
         action = action.unsqueeze(0)
         return action
+
+    def set_full_action(self, action_sequence):
+        # this function gives you an ability to inject your own action sequence into the policy (use for rejection sampling and debugging)
+        print(f"Set the action queue! Current lenght: {len(self.action_queue)}")
+        self.action_queue.extend(action_sequence)
+        print(f"Lenght after action queue insertions: {len(self.action_queue)}")
+    
+    def get_full_action(self, obs_dict, goal_dict=None):
+        """
+        Returns full Tp-length action trajectory sampled from diffusion.
+
+        Output:
+            naction: [B, Tp, Da]
+        """
+        assert not self.nets.training
+
+        To = self.algo_config.horizon.observation_horizon
+        Tp = self.algo_config.horizon.prediction_horizon
+        action_dim = self.ac_dim
+
+        # scheduler steps
+        if self.algo_config.ddpm.enabled:
+            num_inference_timesteps = self.algo_config.ddpm.num_inference_timesteps
+        elif self.algo_config.ddim.enabled:
+            num_inference_timesteps = self.algo_config.ddim.num_inference_timesteps
+        else:
+            raise ValueError
+
+        # select nets
+        nets = self.nets
+        if self.ema is not None:
+            nets = self.ema.averaged_model
+
+        # ---- encode observation ----
+        inputs = {"obs": obs_dict, "goal": goal_dict}
+
+        for k in self.obs_shapes:
+            assert inputs["obs"][k].ndim - 2 == len(self.obs_shapes[k])
+
+        obs_features = TensorUtils.time_distributed(
+            inputs,
+            nets["policy"]["obs_encoder"],
+            inputs_as_kwargs=True
+        )
+
+        B = obs_features.shape[0]
+
+        # flatten to conditioning vector
+        obs_cond = obs_features.flatten(start_dim=1)
+
+        # ---- diffusion sampling ----
+        naction = torch.randn(
+            (B, Tp, action_dim),
+            device=self.device
+        )
+
+        self.noise_scheduler.set_timesteps(num_inference_timesteps)
+
+        for t in self.noise_scheduler.timesteps:
+            noise_pred = nets["policy"]["noise_pred_net"](
+                sample=naction,
+                timestep=t,
+                global_cond=obs_cond
+            )
+
+            naction = self.noise_scheduler.step(
+                model_output=noise_pred,
+                timestep=t,
+                sample=naction
+            ).prev_sample
+
+        return naction
         
     def _get_action_trajectory(self, obs_dict, goal_dict=None):
         assert not self.nets.training

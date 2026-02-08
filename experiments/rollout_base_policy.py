@@ -179,7 +179,6 @@ OUTPUT_PATH = "./outputs/sr_rollout"
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_samples", type=int, default=16)
     parser.add_argument("--horizon", type=int, default=700)
     parser.add_argument("--n_rollouts", type=int, default=1)
     parser.add_argument("--n_step_rollout_video", type=int, default=10)

@@ -24,7 +24,26 @@ def get_Rzz(env):
     bid = sim.model.body_name2id("payload_root")
     return sim.data.body_xmat[bid].reshape(3,3)[2,2]
 
-def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=['agentview'], render=False):
+def run_rejection_sampling(actions_list, env, eval_env):
+    
+
+    scores = np.zeros(len(actions_list))
+    state0 = env.get_state()
+    for i, actions in enumerate(actions_list):
+        eval_env.reset_to(state0)
+        chunk = actions[0,1:]
+        vals = []
+        for t in range(chunk.shape[0]):
+            _obs, _r, done, _info = eval_env.step(chunk[t].cpu().numpy())
+            vals.append(get_Rzz(eval_env))
+            if done:
+                vals.append(1) # final sequence likes goal state but Rzz is as important 
+                break
+        scores[i] = np.mean(vals)
+    
+    return np.argmax(scores), scores
+
+def rollout(policy, env, eval_env, horizon, num_samples=8, video_writer=None, video_skip=5, camera_names=['agentview'], render=False):
     """
     Helper function to carry out rollouts. Supports on-screen rendering, off-screen rendering to a video, 
     and returns the rollout trajectory.
@@ -59,6 +78,24 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
 
     try:
         for step_i in tqdm(range(horizon)):
+
+            ### INSERT REJECTION SAMPLING HERE
+            obs_torch = policy._prepare_observation(obs)
+
+            # INJECTION OF REJECTION SAMPLING
+            recompute_interval = 8
+            if step_i % recompute_interval == 0:
+                actions_list = list() 
+                for i in tqdm(range(num_samples)):
+                    with torch.no_grad():
+                        actions = policy.policy.get_full_action(obs_torch)
+                        actions_list.append(actions)
+                selection, scores_list = run_rejection_sampling(actions_list, env, eval_env)
+
+                selected_chunk = actions_list[selection][0].detach().cpu() # this takes the batch away and turns it into np
+                policy.policy.set_full_action(selected_chunk[1:9]) # forcing the policy to adopt this action, but only Ta, not the Tp 
+                print(f'scores: {scores_list}, best index: {selection}') 
+            
             # get action from policy
             act = policy(ob=obs)
 
@@ -113,6 +150,11 @@ def run_diffusion(args):
         render=(args.record_video == "y"),
         render_offscreen=(args.record_video == "y"),
     )
+    eval_env, _ = FileUtils.env_from_checkpoint(
+        ckpt_path=args.ckpt_path,
+        render=(args.record_video == "y"),
+        render_offscreen=(args.record_video == "y"),
+    )
 
     policy, _ = FileUtils.policy_from_checkpoint(
         ckpt_path=args.ckpt_path,
@@ -141,6 +183,8 @@ def run_diffusion(args):
         stats = rollout(
             policy=policy,
             env=env,
+            eval_env=eval_env,
+            num_samples=args.num_samples,
             horizon=args.horizon,
             video_writer=video_writer,
             video_skip=args.video_skip,
@@ -180,9 +224,11 @@ OUTPUT_PATH = "./outputs/sr_rollout"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_samples", type=int, default=16)
+    parser.add_argument("--Ta", type=int, default=8)
+    parser.add_argument("--T_eval", type=int, default=15)
     parser.add_argument("--horizon", type=int, default=700)
     parser.add_argument("--n_rollouts", type=int, default=1)
-    parser.add_argument("--n_step_rollout_video", type=int, default=10)
+    parser.add_argument("--n_step_rollout_video", type=int, default=1)
     parser.add_argument("--record_video", type=str, choices=["y", "n"], default="y")
     parser.add_argument("--video_skip", type=int, default=1)
     parser.add_argument("--camera_names", nargs="+", default=["frontview"])
