@@ -20,10 +20,13 @@ unset DISPLAY
 
 echo "Starting base rollout training via SLURM"
 cd ~/src/guided-diffusion
+start_time=$(date +%s)
 python -u experiments/rollout_base_policy.py \
   --n_rollouts 40 \
   --output_path /scratch/gilbreth/zoellner/diffusion_rollouts/sr_rollout \
   --ckpt_path /scratch/gilbreth/zoellner/diffusion_runs/run_20260122_211123/20260122211129/models/model_epoch_1100_low_dim_v15_success_0.7.pth \
   --n_step_rollout_video 1 \
   --horizon 500
-echo "Finished base rollout?" 
+end_time=$(date +%s)
+elapsed=$((end_time - start_time))
+echo "Finished base rollout? elapsed_seconds=${elapsed}"

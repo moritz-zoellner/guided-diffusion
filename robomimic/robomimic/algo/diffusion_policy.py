@@ -293,7 +293,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # self.obs_queue.extend([obs_dict] * n_repeats)
         
         if len(self.action_queue) == 0:
-            raise ValueError # should never go here
             # no actions left, run inference
             # turn obs_queue into dict of tensors (concat at T dim)
             # import pdb; pdb.set_trace()

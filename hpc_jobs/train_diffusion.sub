@@ -20,5 +20,8 @@ unset DISPLAY
 
 echo "Starting diffusion policy training via SLURM"
 cd ~/src/guided-diffusion
+start_time=$(date +%s)
 python robomimic/robomimic/scripts/train.py --config configs/diffusion_policy.json --name run_20260122_211123 --resume
-echo "Finished training?" 
+end_time=$(date +%s)
+elapsed=$((end_time - start_time))
+echo "Finished training? elapsed_seconds=${elapsed}"

@@ -24,7 +24,7 @@ def get_Rzz(env):
     bid = sim.model.body_name2id("payload_root")
     return sim.data.body_xmat[bid].reshape(3,3)[2,2]
 
-def run_rejection_sampling(actions_list, env, eval_env):
+def run_rejection_sampling(actions_list, env, eval_env, goal="max"):
     
 
     scores = np.zeros(len(actions_list))
@@ -41,9 +41,11 @@ def run_rejection_sampling(actions_list, env, eval_env):
                 break
         scores[i] = np.mean(vals)
     
+    if goal == "min":
+        return np.argmin(scores), scores
     return np.argmax(scores), scores
 
-def rollout(policy, env, eval_env, horizon, num_samples=8, video_writer=None, video_skip=5, camera_names=['agentview'], render=False):
+def rollout(policy, env, eval_env, horizon, num_samples=8, goal="max", video_writer=None, video_skip=5, camera_names=['agentview'], render=False):
     """
     Helper function to carry out rollouts. Supports on-screen rendering, off-screen rendering to a video, 
     and returns the rollout trajectory.
@@ -85,16 +87,24 @@ def rollout(policy, env, eval_env, horizon, num_samples=8, video_writer=None, vi
             # INJECTION OF REJECTION SAMPLING
             recompute_interval = 8
             if step_i % recompute_interval == 0:
-                actions_list = list() 
-                for i in tqdm(range(num_samples)):
+                actions_list = list()
+                sample_start_time = time.perf_counter()
+                for i in range(num_samples):
                     with torch.no_grad():
                         actions = policy.policy.get_full_action(obs_torch)
                         actions_list.append(actions)
-                selection, scores_list = run_rejection_sampling(actions_list, env, eval_env)
+                sample_end_time = time.perf_counter()
+                print(
+                    f"sample_actions_time_s={sample_end_time - sample_start_time:.4f} "
+                    f"(num_samples={num_samples})"
+                )
+                rs_start_time = time.perf_counter()
+                selection, scores_list = run_rejection_sampling(actions_list, env, eval_env, goal=goal)
+                rs_end_time = time.perf_counter()
+                print(f"run_rejection_sampling_time_s={rs_end_time - rs_start_time:.4f}")
                 #selection, scores_list = 0, []
                 selected_chunk = actions_list[selection][0].detach().cpu() # this takes the batch away and turns it into np
                 policy.policy.set_full_action(selected_chunk[1:9]) # forcing the policy to adopt this action, but only Ta, not the Tp 
-                print(f'scores: {scores_list}, best index: {selection}') 
             
             # get action from policy
             act = policy(ob=obs)
@@ -143,6 +153,7 @@ def run_diffusion(args):
     device = TorchUtils.get_torch_device(try_to_use_cuda=True)
     run_id = args.name if args.name is not None else datetime.now().strftime("%Y%m%d_%H%M%S")
     run_output_path = os.path.join(args.output_path, run_id)
+    stats_path = os.path.join(run_output_path, "rollout_stats.json")
     os.makedirs(run_output_path, exist_ok=True)
 
     env, _ = FileUtils.env_from_checkpoint(
@@ -185,6 +196,7 @@ def run_diffusion(args):
             env=env,
             eval_env=eval_env,
             num_samples=args.num_samples,
+            goal=args.goal,
             horizon=args.horizon,
             video_writer=video_writer,
             video_skip=args.video_skip,
@@ -192,6 +204,9 @@ def run_diffusion(args):
         )
         rollout_end_time = time.perf_counter()
         all_stats.append(stats)
+        # Persist stats after each rollout so partial results are available.
+        with open(stats_path, "w", encoding="utf-8") as f:
+            json.dump(all_stats, f, indent=2)
         if video_writer is not None:
             video_writer.close()
         rollout_seconds = rollout_end_time - rollout_start_time
@@ -203,9 +218,6 @@ def run_diffusion(args):
         )
 
 
-    stats_path = os.path.join(run_output_path, "rollout_stats.json")
-    with open(stats_path, "w", encoding="utf-8") as f:
-        json.dump(all_stats, f, indent=2)
 
     if video_dir is not None:
         print(
@@ -224,6 +236,7 @@ OUTPUT_PATH = "./outputs/sr_rollout"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_samples", type=int, default=16)
+    parser.add_argument("--goal", type=str, choices=["min", "max"], default="max")
     parser.add_argument("--Ta", type=int, default=8)
     parser.add_argument("--T_eval", type=int, default=15)
     parser.add_argument("--horizon", type=int, default=700)
