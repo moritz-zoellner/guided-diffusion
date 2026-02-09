@@ -91,7 +91,7 @@ def rollout(policy, env, eval_env, horizon, num_samples=8, video_writer=None, vi
                         actions = policy.policy.get_full_action(obs_torch)
                         actions_list.append(actions)
                 selection, scores_list = run_rejection_sampling(actions_list, env, eval_env)
-
+                #selection, scores_list = 0, []
                 selected_chunk = actions_list[selection][0].detach().cpu() # this takes the batch away and turns it into np
                 policy.policy.set_full_action(selected_chunk[1:9]) # forcing the policy to adopt this action, but only Ta, not the Tp 
                 print(f'scores: {scores_list}, best index: {selection}') 
@@ -152,8 +152,8 @@ def run_diffusion(args):
     )
     eval_env, _ = FileUtils.env_from_checkpoint(
         ckpt_path=args.ckpt_path,
-        render=(args.record_video == "y"),
-        render_offscreen=(args.record_video == "y"),
+        render=False,
+        render_offscreen=False,
     )
 
     policy, _ = FileUtils.policy_from_checkpoint(
