@@ -19,12 +19,12 @@ from robomimic.envs.wrappers import EnvWrapper
 from robomimic.algo import RolloutPolicy
 
 
-def get_Rzz(env):
+def get_metrics(env, body_name='Can_main'): # 'payload_root' for Transport
     sim = env.env.env.sim
-    bid = sim.model.body_name2id("payload_root")
-    return sim.data.body_xmat[bid].reshape(3,3)[2,2]
+    bid = sim.model.body_name2id(body_name)
+    return sim.data.body_xmat[bid].reshape(3,3)[2,2], sim.data.body_xpos[bid].copy()
 
-def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=['agentview'], render=False):
+def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=['agentview'], render=False, init_state=None):
     """
     Helper function to carry out rollouts. Supports on-screen rendering, off-screen rendering to a video, 
     and returns the rollout trajectory.
@@ -48,14 +48,18 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
     policy.start_episode()
     
     env.reset()
-    state_dict = env.get_state()
-    obs = env.reset_to(state_dict)
+    if init_state is not None:
+        obs = env.reset_to(init_state)
+    else:
+        state_dict = env.get_state()
+        obs = env.reset_to(state_dict)
 
     results = {}
     video_count = 0  # video frame counter
     total_reward = 0.
 
     Rzz = []
+    Pos = []
 
     try:
         for step_i in tqdm(range(horizon)):
@@ -65,7 +69,9 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
             # play action
             next_obs, r, done, _ = env.step(act)
 
-            Rzz.append(get_Rzz(env))
+            rzz, pos  = get_metrics(env)
+            Rzz.append(rzz)
+            Pos.append(pos)
             # compute reward
             total_reward += r
             success = env.is_success()["task"]
@@ -88,8 +94,6 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
 
             # update for next iter
             obs = deepcopy(next_obs)
-            state_dict = env.get_state()
-
     except env.rollout_exceptions as e:
         print("WARNING: got rollout exception {}".format(e))
 
@@ -97,7 +101,8 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
         Return=total_reward, 
         Horizon=(step_i + 1), 
         Success_Rate=float(success),
-        Rzz_List=Rzz
+        Rzz_List=Rzz,
+        Pos_List=Pos
     )
 
     return stats
@@ -126,6 +131,10 @@ def run_diffusion(args):
 
     all_stats = []
     print("Starting Rollouts")
+    init_state = None
+    if args.fix_init_state == "y":
+        env.reset()
+        init_state = env.get_state()
     for rollout_i in range(args.n_rollouts):
         rollout_num = rollout_i + 1
         video_writer = None
@@ -145,6 +154,7 @@ def run_diffusion(args):
             video_writer=video_writer,
             video_skip=args.video_skip,
             camera_names=args.camera_names,
+            init_state=init_state,
         )
         rollout_end_time = time.perf_counter()
         all_stats.append(stats)
@@ -161,7 +171,7 @@ def run_diffusion(args):
 
     stats_path = os.path.join(run_output_path, "rollout_stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
-        json.dump(all_stats, f, indent=2)
+        json.dump(all_stats, f, indent=2).json
 
     if video_dir is not None:
         print(
@@ -188,6 +198,7 @@ def main():
     parser.add_argument("--output_path", type=str, default=OUTPUT_PATH)
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--ckpt_path", type=str, default=CKPT_PATH)
+    parser.add_argument("--fix_init_state", type=str, choices=["y", "n"], default="n")
     args = parser.parse_args()
     run_diffusion(args)
 

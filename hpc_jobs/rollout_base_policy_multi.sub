@@ -21,11 +21,13 @@ unset DISPLAY
 echo "Starting base rollout training via SLURM"
 cd ~/src/guided-diffusion
 
-RUN_DIR=/scratch/gilbreth/zoellner/diffusion_runs/run_20260122_211123/20260122211129/models
-OUT_DIR=/scratch/gilbreth/zoellner/diffusion_rollouts/sr_rollout
+#RUN_DIR=/scratch/gilbreth/zoellner/diffusion_runs/run_20260122_211123/20260122211129/models
+#RUN_DIR=/scratch/gilbreth/zoellner/diffusion_runs/can_mh_lowdim/20260209180642/models
+RUN_DIR=/scratch/gilbreth/zoellner/diffusion_runs/can_ph_lowdim/20260209201546/models
+OUT_DIR=/scratch/gilbreth/zoellner/diffusion_rollouts/can_rollouts/ph_success
 
 total_start_time=$(date +%s)
-for EPOCH in 1300 1500 1700 1850 2000; do
+for EPOCH in 1000 1200 1400 1600 1800 2000; do
   CKPT_PATH=${RUN_DIR}/model_epoch_${EPOCH}.pth
   echo "Running rollout for epoch ${EPOCH}: ${CKPT_PATH}"
   start_time=$(date +%s)
@@ -34,7 +36,7 @@ for EPOCH in 1300 1500 1700 1850 2000; do
     --output_path ${OUT_DIR} \
     --ckpt_path ${CKPT_PATH} \
     --n_step_rollout_video 1 \
-    --horizon 500 \
+    --horizon 400 \
     --name model_epoch_${EPOCH}
   end_time=$(date +%s)
   elapsed=$((end_time - start_time))
