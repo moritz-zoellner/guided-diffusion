@@ -18,8 +18,8 @@ export EGL_DEVICE_ID=0
 export CUDA_VISIBLE_DEVICES=0
 unset DISPLAY
 
-#CKPT_PATH=/scratch/gilbreth/zoellner/diffusion_runs/can_mh_lowdim/20260209180642/models/model_epoch_2000.pth
-CKPT_PATH=/scratch/gilbreth/zoellner/diffusion_runs/can_ph_lowdim/20260209201546/models/model_epoch_2000.pth
+CKPT_PATH=/scratch/gilbreth/zoellner/diffusion_runs/can_mh_lowdim/20260209180642/models/model_epoch_2000.pth
+#CKPT_PATH=/scratch/gilbreth/zoellner/diffusion_runs/can_ph_lowdim/20260209201546/models/model_epoch_2000.pth
 echo "Starting base rollout training via SLURM"
 cd ~/src/guided-diffusion
 start_time=$(date +%s)
@@ -29,7 +29,7 @@ python -u experiments/rollout_base_policy.py \
   --ckpt_path ${CKPT_PATH} \
   --n_step_rollout_video 1 \
   --horizon 300 \
-  --name policy_diversity_ph_h300_pos \
+  --name policy_diversity_mh_h300_pos \
   --fix_init_state y 
 end_time=$(date +%s)
 elapsed=$((end_time - start_time))

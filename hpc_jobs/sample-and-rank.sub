@@ -18,18 +18,21 @@ export EGL_DEVICE_ID=0
 export CUDA_VISIBLE_DEVICES=0
 unset DISPLAY
 
+CKPT_PATH=/scratch/gilbreth/zoellner/diffusion_runs/can_mh_lowdim/20260209180642/models/model_epoch_2000.pth
+#CKPT_PATH=/scratch/gilbreth/zoellner/diffusion_runs/can_ph_lowdim/20260209201546/models/model_epoch_2000.pth
 echo "Starting sample-and-rank via SLURM"
 cd ~/src/guided-diffusion
 start_time=$(date +%s)
 python -u experiments/sample-and-rank.py \
-  --n_rollouts 50 \
-  --output_path /scratch/gilbreth/zoellner/diffusion_rollouts/sr_rollout \
-  --ckpt_path /scratch/gilbreth/zoellner/diffusion_runs/run_20260122_211123/20260122211129/models/model_epoch_2000.pth \
-  --num_samples 16 \
+  --n_rollouts 10 \
+  --output_path /scratch/gilbreth/zoellner/diffusion_rollouts/can_rollouts \
+  --ckpt_path ${CKPT_PATH} \
+  --num_samples 8 \
   --n_step_rollout_video 1 \
-  --name n16h500r50max \
-  --horizon 500 \
-  --goal max
+  --name n8h300r50g1 \
+  --horizon 300 \
+  --goal 1 \
+  --fix_init_state y
 
 end_time=$(date +%s)
 elapsed=$((end_time - start_time))

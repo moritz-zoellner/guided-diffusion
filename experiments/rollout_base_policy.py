@@ -71,7 +71,7 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
 
             rzz, pos  = get_metrics(env)
             Rzz.append(rzz)
-            Pos.append(pos)
+            Pos.append(pos.tolist())
             # compute reward
             total_reward += r
             success = env.is_success()["task"]
@@ -165,13 +165,13 @@ def run_diffusion(args):
             f"[rollout {rollout_num}/{args.n_rollouts}] "
             f"time_s={rollout_seconds:.2f} "
             f"video_made={make_video} "
-            f"stats: { {key: (sum(value) / len(value) if key == 'Rzz_List' and len(value) > 0 else value) for key, value in stats.items()} }"
+            f"stats: { {key: (len(value) if key in ['Rzz_List', 'Pos_List'] and len(value) > 0 else value) for key, value in stats.items()} }"
         )
 
 
     stats_path = os.path.join(run_output_path, "rollout_stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
-        json.dump(all_stats, f, indent=2).json
+        json.dump(all_stats, f, indent=2)
 
     if video_dir is not None:
         print(

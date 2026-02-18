@@ -19,13 +19,12 @@ from robomimic.envs.wrappers import EnvWrapper
 from robomimic.algo import RolloutPolicy
 
 
-def get_Rzz(env):
+def get_metrics(env, body_name='Can_main'): #'payload_root' for transport
     sim = env.env.env.sim
-    bid = sim.model.body_name2id("payload_root")
-    return sim.data.body_xmat[bid].reshape(3,3)[2,2]
+    bid = sim.model.body_name2id(body_name)
+    return sim.data.body_xmat[bid].reshape(3,3)[2,2], sim.data.body_xpos[bid].copy
 
-def run_rejection_sampling(actions_list, env, eval_env, goal="max"):
-    
+def run_rejection_sampling(actions_list, env, eval_env, goal=1):
 
     scores = np.zeros(len(actions_list))
     state0 = env.get_state()
@@ -35,17 +34,16 @@ def run_rejection_sampling(actions_list, env, eval_env, goal="max"):
         vals = []
         for t in range(chunk.shape[0]):
             _obs, _r, done, _info = eval_env.step(chunk[t].cpu().numpy())
-            vals.append(get_Rzz(eval_env))
+            rzz, _ = get_metrics(eval_env)
+            vals.append(rzz)
             if done:
                 vals.append(1) # final sequence likes goal state but Rzz is as important 
                 break
         scores[i] = np.mean(vals)
     
-    if goal == "min":
-        return np.argmin(scores), scores
-    return np.argmax(scores), scores
+    return np.argmin(np.abs(scores - goal)), scores
 
-def rollout(policy, env, eval_env, horizon, num_samples=8, goal="max", video_writer=None, video_skip=5, camera_names=['agentview'], render=False):
+def rollout(policy, env, eval_env, horizon, num_samples=8, goal=1, video_writer=None, video_skip=5, camera_names=['agentview'], render=False, init_state=None):
     """
     Helper function to carry out rollouts. Supports on-screen rendering, off-screen rendering to a video, 
     and returns the rollout trajectory.
@@ -69,14 +67,18 @@ def rollout(policy, env, eval_env, horizon, num_samples=8, goal="max", video_wri
     policy.start_episode()
     
     env.reset()
-    state_dict = env.get_state()
-    obs = env.reset_to(state_dict)
+    if init_state is not None:
+        obs = env.reset_to(init_state)
+    else:
+        state_dict = env.get_state()
+        obs = env.reset_to(state_dict)
 
     results = {}
     video_count = 0  # video frame counter
     total_reward = 0.
 
     Rzz = []
+    Pos = []
 
     try:
         for step_i in tqdm(range(horizon)):
@@ -111,8 +113,9 @@ def rollout(policy, env, eval_env, horizon, num_samples=8, goal="max", video_wri
 
             # play action
             next_obs, r, done, _ = env.step(act)
-
-            Rzz.append(get_Rzz(env))
+            rzz, pos = get_metrics(env)
+            Rzz.append(rzz)
+            Pos.append(pos.tolist())
             # compute reward
             total_reward += r
             success = env.is_success()["task"]
@@ -144,7 +147,8 @@ def rollout(policy, env, eval_env, horizon, num_samples=8, goal="max", video_wri
         Return=total_reward, 
         Horizon=(step_i + 1), 
         Success_Rate=float(success),
-        Rzz_List=Rzz
+        Rzz_List=Rzz,
+        Pos_List=Pos
     )
 
     return stats
@@ -179,6 +183,10 @@ def run_diffusion(args):
 
     all_stats = []
     print("Starting Rollouts")
+    init_state = None
+    if args.fix_init_state == "y":
+        env.reset()
+        init_state = env.get_state()
     for rollout_i in range(args.n_rollouts):
         rollout_num = rollout_i + 1
         video_writer = None
@@ -201,6 +209,7 @@ def run_diffusion(args):
             video_writer=video_writer,
             video_skip=args.video_skip,
             camera_names=args.camera_names,
+            init_state=init_state,
         )
         rollout_end_time = time.perf_counter()
         all_stats.append(stats)
@@ -236,7 +245,7 @@ OUTPUT_PATH = "./outputs/sr_rollout"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_samples", type=int, default=16)
-    parser.add_argument("--goal", type=str, choices=["min", "max"], default="max")
+    parser.add_argument("--goal", type=int, default=1)
     parser.add_argument("--Ta", type=int, default=8)
     parser.add_argument("--T_eval", type=int, default=15)
     parser.add_argument("--horizon", type=int, default=700)
@@ -248,6 +257,7 @@ def main():
     parser.add_argument("--output_path", type=str, default=OUTPUT_PATH)
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--ckpt_path", type=str, default=CKPT_PATH)
+    parser.add_argument("--fix_init_state", type=str, choices=["y", "n"], default="n")
     args = parser.parse_args()
     run_diffusion(args)
 
