@@ -24,6 +24,17 @@ def get_metrics(env, body_name='Can_main'): #'payload_root' for transport
     bid = sim.model.body_name2id(body_name)
     return sim.data.body_xmat[bid].reshape(3,3)[2,2], sim.data.body_xpos[bid].copy()
 
+def to_jsonable(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_jsonable(v) for v in obj]
+    return obj
+
 def run_rejection_sampling(actions_list, env, eval_env, goal=1):
 
     scores = np.zeros(len(actions_list))
@@ -187,6 +198,9 @@ def run_diffusion(args):
     if args.fix_init_state == "y":
         env.reset()
         init_state = env.get_state()
+        init_state_path = os.path.join(run_output_path, "init_state.json")
+        with open(init_state_path, "w", encoding="utf-8") as f:
+            json.dump(to_jsonable(init_state), f, indent=2)
     baseline_cutoff = args.n_rollouts // 2
     for rollout_i in range(args.n_rollouts):
         rollout_num = rollout_i + 1

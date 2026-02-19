@@ -1,0 +1,569 @@
+Starting sample-and-rank via SLURM
+[robosuite WARNING] No private macro file found! (macros.py:53)
+[robosuite WARNING] It is recommended to use a private macro file (macros.py:54)
+[robosuite WARNING] To setup, run: python /home/zoellner/src/guided-diffusion/robosuite/robosuite/scripts/setup_macros.py (macros.py:55)
+[robosuite WARNING] Could not import robosuite_models. Some robots may not be available. If you want to use these robots, please install robosuite_models from source (https://github.com/ARISE-Initiative/robosuite_models) or through pip install. (__init__.py:30)
+Created environment with name PickPlaceCan
+Action size is 7
+Created environment with name PickPlaceCan
+Action size is 7
+============= Loaded Config =============
+{
+    "algo_name": "diffusion_policy",
+    "experiment": {
+        "name": "can_mh_lowdim",
+        "validate": false,
+        "logging": {
+            "terminal_output_to_txt": true,
+            "log_tb": true,
+            "log_wandb": true,
+            "wandb_proj_name": "guided_diffusion"
+        },
+        "save": {
+            "enabled": true,
+            "every_n_seconds": null,
+            "every_n_epochs": 50,
+            "epochs": [],
+            "on_best_validation": false,
+            "on_best_rollout_return": false,
+            "on_best_rollout_success_rate": true
+        },
+        "epoch_every_n_steps": 100,
+        "validation_epoch_every_n_steps": 10,
+        "env": null,
+        "additional_envs": null,
+        "render": false,
+        "render_video": true,
+        "keep_all_videos": true,
+        "video_skip": 2,
+        "rollout": {
+            "enabled": true,
+            "n": 10,
+            "horizon": 200,
+            "rate": 50,
+            "warmstart": 0,
+            "terminate_on_success": true
+        },
+        "env_meta_update_dict": {},
+        "ckpt_path": null
+    },
+    "train": {
+        "data": [
+            {
+                "path": "/home/zoellner/src/guided-diffusion/data/can/mh/low_dim_v15.hdf5"
+            }
+        ],
+        "output_dir": "/scratch/gilbreth/zoellner/diffusion_runs/",
+        "normalize_weights_by_ds_size": false,
+        "num_data_workers": 0,
+        "hdf5_cache_mode": "all",
+        "hdf5_use_swmr": true,
+        "hdf5_load_next_obs": false,
+        "hdf5_normalize_obs": false,
+        "hdf5_filter_key": null,
+        "hdf5_validation_filter_key": null,
+        "seq_length": 16,
+        "pad_seq_length": true,
+        "frame_stack": 2,
+        "pad_frame_stack": true,
+        "dataset_keys": [
+            "actions",
+            "rewards",
+            "dones"
+        ],
+        "action_keys": [
+            "actions"
+        ],
+        "action_config": {
+            "actions": {
+                "normalization": null
+            }
+        },
+        "goal_mode": null,
+        "cuda": true,
+        "batch_size": 100,
+        "num_epochs": 2000,
+        "seed": 1,
+        "max_grad_norm": null
+    },
+    "algo": {
+        "optim_params": {
+            "policy": {
+                "optimizer_type": "adamw",
+                "learning_rate": {
+                    "initial": 0.0001,
+                    "decay_factor": 0.1,
+                    "step_every_batch": true,
+                    "scheduler_type": "cosine",
+                    "num_cycles": 0.5,
+                    "warmup_steps": 500,
+                    "epoch_schedule": []
+                },
+                "regularization": {
+                    "L2": 1e-06
+                },
+                "num_train_batches": 100,
+                "num_epochs": 2000
+            }
+        },
+        "horizon": {
+            "observation_horizon": 2,
+            "action_horizon": 8,
+            "prediction_horizon": 16
+        },
+        "unet": {
+            "enabled": true,
+            "diffusion_step_embed_dim": 256,
+            "down_dims": [
+                256,
+                512,
+                1024
+            ],
+            "kernel_size": 5,
+            "n_groups": 8
+        },
+        "ema": {
+            "enabled": true,
+            "power": 0.75
+        },
+        "ddpm": {
+            "enabled": true,
+            "num_train_timesteps": 100,
+            "num_inference_timesteps": 100,
+            "beta_schedule": "squaredcos_cap_v2",
+            "clip_sample": true,
+            "prediction_type": "epsilon"
+        },
+        "ddim": {
+            "enabled": false,
+            "num_train_timesteps": 100,
+            "num_inference_timesteps": 10,
+            "beta_schedule": "squaredcos_cap_v2",
+            "clip_sample": true,
+            "set_alpha_to_one": true,
+            "steps_offset": 0,
+            "prediction_type": "epsilon"
+        }
+    },
+    "observation": {
+        "modalities": {
+            "obs": {
+                "low_dim": [
+                    "robot0_eef_pos",
+                    "robot0_eef_quat",
+                    "robot0_gripper_qpos",
+                    "object"
+                ],
+                "rgb": [],
+                "depth": [],
+                "scan": []
+            },
+            "goal": {
+                "low_dim": [],
+                "rgb": [],
+                "depth": [],
+                "scan": []
+            }
+        },
+        "encoder": {
+            "low_dim": {
+                "core_class": null,
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            },
+            "rgb": {
+                "core_class": "VisualCore",
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            },
+            "depth": {
+                "core_class": "VisualCore",
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            },
+            "scan": {
+                "core_class": "ScanCore",
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            }
+        }
+    },
+    "meta": {
+        "hp_base_config_file": null,
+        "hp_keys": [],
+        "hp_values": []
+    }
+}
+
+============= Initialized Observation Utils with Obs Spec =============
+
+using obs modality: low_dim with keys: ['robot0_eef_quat', 'robot0_gripper_qpos', 'object', 'robot0_eef_pos']
+using obs modality: rgb with keys: []
+using obs modality: depth with keys: []
+using obs modality: scan with keys: []
+number of parameters: 6.587828e+07
+============= Loaded Policy =============
+DiffusionPolicyUNet (
+  ModuleDict(
+    (policy): ModuleDict(
+      (obs_encoder): ObservationGroupEncoder(
+          group=obs
+          ObservationEncoder(
+              Key(
+                  name=object
+                  shape=[14]
+                  modality=low_dim
+                  randomizer=ModuleList(
+                    (0): None
+                  )
+                  net=None
+                  sharing_from=None
+              )
+              Key(
+                  name=robot0_eef_pos
+                  shape=[3]
+                  modality=low_dim
+                  randomizer=ModuleList(
+                    (0): None
+                  )
+                  net=None
+                  sharing_from=None
+              )
+              Key(
+                  name=robot0_eef_quat
+                  shape=[4]
+                  modality=low_dim
+                  randomizer=ModuleList(
+                    (0): None
+                  )
+                  net=None
+                  sharing_from=None
+              )
+              Key(
+                  name=robot0_gripper_qpos
+                  shape=[2]
+                  modality=low_dim
+                  randomizer=ModuleList(
+                    (0): None
+                  )
+                  net=None
+                  sharing_from=None
+              )
+              output_shape=[23]
+          )
+      )
+      (noise_pred_net): ConditionalUnet1D(
+        (mid_modules): ModuleList(
+          (0-1): 2 x ConditionalResidualBlock1D(
+            (blocks): ModuleList(
+              (0-1): 2 x Conv1dBlock(
+                (block): Sequential(
+                  (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                  (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                  (2): Mish()
+                )
+              )
+            )
+            (cond_encoder): Sequential(
+              (0): Mish()
+              (1): Linear(in_features=302, out_features=2048, bias=True)
+              (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+            )
+            (residual_conv): Identity()
+          )
+        )
+        (diffusion_step_encoder): Sequential(
+          (0): SinusoidalPosEmb()
+          (1): Linear(in_features=256, out_features=1024, bias=True)
+          (2): Mish()
+          (3): Linear(in_features=1024, out_features=256, bias=True)
+        )
+        (up_modules): ModuleList(
+          (0): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(2048, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(2048, 512, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Upsample1d(
+              (conv): ConvTranspose1d(512, 512, kernel_size=(4,), stride=(2,), padding=(1,))
+            )
+          )
+          (1): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(1024, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(1024, 256, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Upsample1d(
+              (conv): ConvTranspose1d(256, 256, kernel_size=(4,), stride=(2,), padding=(1,))
+            )
+          )
+        )
+        (down_modules): ModuleList(
+          (0): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(7, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(7, 256, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Downsample1d(
+              (conv): Conv1d(256, 256, kernel_size=(3,), stride=(2,), padding=(1,))
+            )
+          )
+          (1): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(256, 512, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Downsample1d(
+              (conv): Conv1d(512, 512, kernel_size=(3,), stride=(2,), padding=(1,))
+            )
+          )
+          (2): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=2048, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(512, 1024, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=302, out_features=2048, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Identity()
+          )
+        )
+        (final_conv): Sequential(
+          (0): Conv1dBlock(
+            (block): Sequential(
+              (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+              (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+              (2): Mish()
+            )
+          )
+          (1): Conv1d(256, 7, kernel_size=(1,), stride=(1,))
+        )
+      )
+    )
+  )
+)
+Starting Rollouts
+  0%|          | 0/300 [00:00<?, ?it/s]ObservationKeyToModalityDict: robot0_joint_pos not found, adding robot0_joint_pos to mapping with assumed low_dim modality!
+ObservationKeyToModalityDict: robot0_joint_pos_cos not found, adding robot0_joint_pos_cos to mapping with assumed low_dim modality!
+ObservationKeyToModalityDict: robot0_joint_pos_sin not found, adding robot0_joint_pos_sin to mapping with assumed low_dim modality!
+ObservationKeyToModalityDict: robot0_joint_vel not found, adding robot0_joint_vel to mapping with assumed low_dim modality!
+ObservationKeyToModalityDict: robot0_eef_quat_site not found, adding robot0_eef_quat_site to mapping with assumed low_dim modality!
+ObservationKeyToModalityDict: robot0_gripper_qvel not found, adding robot0_gripper_qvel to mapping with assumed low_dim modality!
+ObservationKeyToModalityDict: lang_emb not found, adding lang_emb to mapping with assumed low_dim modality!
+ObservationKeyToModalityDict: timesteps not found, adding timesteps to mapping with assumed low_dim modality!
+ObservationKeyToModalityDict: actions not found, adding actions to mapping with assumed low_dim modality!
+  0%|          | 1/300 [00:02<11:39,  2.34s/it]  3%|▎         | 8/300 [00:02<01:06,  4.42it/s]  4%|▍         | 12/300 [00:03<00:54,  5.25it/s]  6%|▌         | 17/300 [00:03<00:45,  6.28it/s]  8%|▊         | 24/300 [00:03<00:25, 10.86it/s]  9%|▉         | 28/300 [00:04<00:28,  9.47it/s] 11%|█         | 33/300 [00:04<00:29,  9.18it/s] 13%|█▎        | 40/300 [00:04<00:18, 13.97it/s] 15%|█▍        | 44/300 [00:05<00:22, 11.27it/s] 16%|█▋        | 49/300 [00:06<00:24, 10.27it/s] 19%|█▊        | 56/300 [00:06<00:16, 15.08it/s] 20%|██        | 60/300 [00:06<00:20, 11.90it/s] 22%|██▏       | 65/300 [00:07<00:22, 10.66it/s] 24%|██▍       | 72/300 [00:07<00:14, 15.49it/s] 25%|██▌       | 76/300 [00:08<00:18, 12.11it/s] 27%|██▋       | 81/300 [00:08<00:20, 10.78it/s] 29%|██▉       | 88/300 [00:08<00:13, 15.59it/s] 31%|███       | 92/300 [00:09<00:17, 12.14it/s] 32%|███▏      | 97/300 [00:09<00:18, 10.81it/s] 35%|███▍      | 104/300 [00:10<00:12, 15.54it/s] 36%|███▌      | 108/300 [00:10<00:15, 12.12it/s] 38%|███▊      | 113/300 [00:11<00:17, 10.79it/s] 40%|████      | 120/300 [00:11<00:11, 15.47it/s] 41%|████▏     | 124/300 [00:11<00:14, 12.08it/s] 43%|████▎     | 129/300 [00:12<00:15, 10.74it/s] 45%|████▌     | 135/300 [00:12<00:11, 14.75it/s] 46%|████▋     | 139/300 [00:13<00:13, 11.61it/s] 48%|████▊     | 145/300 [00:13<00:14, 10.94it/s] 50%|█████     | 151/300 [00:13<00:09, 14.92it/s] 52%|█████▏    | 155/300 [00:14<00:12, 11.69it/s] 54%|█████▎    | 161/300 [00:15<00:12, 10.99it/s] 56%|█████▌    | 168/300 [00:15<00:08, 15.60it/s] 56%|█████▌    | 168/300 [00:15<00:12, 10.73it/s]
+[rollout 1/60] time_s=16.74 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 169, 'Success_Rate': 1.0, 'Rzz_List': 169, 'Pos_List': 169, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:16,  1.52it/s]  2%|▏         | 7/300 [00:00<00:24, 11.94it/s]  4%|▎         | 11/300 [00:01<00:34,  8.49it/s]  6%|▌         | 17/300 [00:02<00:32,  8.73it/s]  8%|▊         | 23/300 [00:02<00:20, 13.50it/s]  9%|▉         | 27/300 [00:02<00:26, 10.44it/s] 11%|█         | 33/300 [00:03<00:27,  9.84it/s] 13%|█▎        | 40/300 [00:03<00:17, 14.59it/s] 15%|█▍        | 44/300 [00:04<00:22, 11.41it/s] 16%|█▋        | 49/300 [00:04<00:24, 10.20it/s] 19%|█▊        | 56/300 [00:04<00:16, 14.88it/s] 20%|██        | 60/300 [00:05<00:20, 11.61it/s] 22%|██▏       | 65/300 [00:06<00:22, 10.30it/s] 24%|██▍       | 72/300 [00:06<00:15, 14.92it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.54it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.24it/s] 29%|██▉       | 88/300 [00:07<00:14, 14.86it/s] 31%|███       | 92/300 [00:08<00:18, 11.53it/s] 32%|███▏      | 97/300 [00:08<00:19, 10.24it/s] 35%|███▍      | 104/300 [00:08<00:13, 14.78it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.50it/s] 38%|███▊      | 113/300 [00:10<00:18, 10.16it/s] 40%|███▉      | 119/300 [00:10<00:12, 14.03it/s] 41%|████      | 123/300 [00:10<00:16, 11.03it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.33it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.15it/s] 46%|████▋     | 139/300 [00:12<00:14, 11.02it/s] 48%|████▊     | 145/300 [00:12<00:14, 10.34it/s] 50%|█████     | 151/300 [00:12<00:10, 14.13it/s] 52%|█████▏    | 155/300 [00:13<00:13, 11.15it/s] 54%|█████▎    | 161/300 [00:14<00:13, 10.50it/s] 56%|█████▌    | 167/300 [00:14<00:09, 14.31it/s] 57%|█████▋    | 171/300 [00:14<00:11, 11.30it/s] 57%|█████▋    | 171/300 [00:14<00:11, 11.50it/s]
+[rollout 2/60] time_s=15.99 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 172, 'Success_Rate': 1.0, 'Rzz_List': 172, 'Pos_List': 172, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:25,  1.46it/s]  3%|▎         | 8/300 [00:00<00:22, 13.25it/s]  4%|▍         | 13/300 [00:01<00:27, 10.34it/s]  6%|▌         | 17/300 [00:01<00:32,  8.73it/s]  8%|▊         | 25/300 [00:02<00:26, 10.28it/s] 11%|█         | 33/300 [00:03<00:24, 11.07it/s] 13%|█▎        | 40/300 [00:03<00:16, 15.55it/s] 15%|█▍        | 44/300 [00:03<00:21, 12.14it/s] 16%|█▋        | 49/300 [00:04<00:23, 10.69it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.30it/s] 20%|██        | 60/300 [00:05<00:20, 11.89it/s] 22%|██▏       | 65/300 [00:05<00:22, 10.54it/s] 24%|██▍       | 72/300 [00:05<00:14, 15.20it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.78it/s] 27%|██▋       | 81/300 [00:07<00:20, 10.46it/s] 29%|██▉       | 88/300 [00:07<00:14, 15.09it/s] 31%|███       | 92/300 [00:07<00:17, 11.68it/s] 32%|███▏      | 97/300 [00:08<00:19, 10.38it/s] 35%|███▍      | 104/300 [00:08<00:13, 14.98it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.69it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.41it/s] 40%|███▉      | 119/300 [00:09<00:12, 14.36it/s] 41%|████      | 123/300 [00:10<00:15, 11.23it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.57it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.46it/s] 46%|████▋     | 139/300 [00:11<00:14, 11.36it/s] 48%|████▊     | 145/300 [00:12<00:14, 10.69it/s] 50%|█████     | 151/300 [00:12<00:10, 14.57it/s] 52%|█████▏    | 155/300 [00:13<00:12, 11.47it/s] 52%|█████▏    | 156/300 [00:13<00:12, 11.83it/s]
+[rollout 3/60] time_s=14.60 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 157, 'Success_Rate': 1.0, 'Rzz_List': 157, 'Pos_List': 157, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:27,  1.44it/s]  3%|▎         | 8/300 [00:00<00:22, 13.03it/s]  4%|▍         | 13/300 [00:01<00:28, 10.09it/s]  6%|▌         | 17/300 [00:02<00:32,  8.58it/s]  8%|▊         | 25/300 [00:02<00:27, 10.12it/s] 11%|█         | 33/300 [00:03<00:24, 10.92it/s] 13%|█▎        | 40/300 [00:03<00:16, 15.33it/s] 15%|█▍        | 44/300 [00:04<00:21, 11.96it/s] 16%|█▋        | 49/300 [00:04<00:23, 10.57it/s] 19%|█▊        | 56/300 [00:04<00:16, 15.14it/s] 20%|██        | 60/300 [00:05<00:20, 11.81it/s] 22%|██▏       | 65/300 [00:05<00:22, 10.40it/s] 24%|██▍       | 72/300 [00:06<00:15, 14.99it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.65it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.36it/s] 29%|██▉       | 88/300 [00:07<00:14, 14.94it/s] 31%|███       | 92/300 [00:07<00:17, 11.59it/s] 32%|███▏      | 97/300 [00:08<00:19, 10.30it/s] 34%|███▍      | 103/300 [00:08<00:13, 14.20it/s] 36%|███▌      | 107/300 [00:09<00:17, 11.07it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.44it/s] 40%|███▉      | 119/300 [00:10<00:12, 14.27it/s] 41%|████      | 123/300 [00:10<00:15, 11.17it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.51it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.36it/s] 46%|████▋     | 139/300 [00:12<00:14, 11.25it/s] 48%|████▊     | 145/300 [00:12<00:14, 10.51it/s] 50%|█████     | 151/300 [00:12<00:10, 14.33it/s] 52%|█████▏    | 155/300 [00:13<00:12, 11.23it/s] 52%|█████▏    | 157/300 [00:13<00:12, 11.72it/s]
+[rollout 4/60] time_s=14.50 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 158, 'Success_Rate': 1.0, 'Rzz_List': 158, 'Pos_List': 158, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:24,  1.46it/s]  3%|▎         | 8/300 [00:00<00:22, 13.25it/s]  4%|▍         | 13/300 [00:01<00:27, 10.27it/s]  6%|▌         | 17/300 [00:01<00:32,  8.68it/s]  8%|▊         | 25/300 [00:02<00:26, 10.22it/s] 11%|█         | 33/300 [00:03<00:24, 11.03it/s] 13%|█▎        | 40/300 [00:03<00:16, 15.47it/s] 15%|█▍        | 44/300 [00:03<00:21, 12.09it/s] 16%|█▋        | 49/300 [00:04<00:23, 10.68it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.28it/s] 20%|██        | 60/300 [00:05<00:20, 11.80it/s] 22%|██▏       | 65/300 [00:05<00:22, 10.44it/s] 24%|██▍       | 72/300 [00:06<00:15, 15.07it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.72it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.40it/s] 29%|██▉       | 88/300 [00:07<00:14, 15.07it/s] 31%|███       | 92/300 [00:07<00:17, 11.74it/s] 32%|███▏      | 97/300 [00:08<00:19, 10.43it/s] 35%|███▍      | 104/300 [00:08<00:13, 15.03it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.66it/s] 38%|███▊      | 113/300 [00:09<00:18, 10.36it/s] 40%|████      | 120/300 [00:09<00:12, 14.95it/s] 41%|████▏     | 124/300 [00:10<00:15, 11.65it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.35it/s] 45%|████▌     | 136/300 [00:11<00:11, 14.91it/s] 47%|████▋     | 140/300 [00:11<00:13, 11.61it/s] 48%|████▊     | 145/300 [00:12<00:15, 10.33it/s] 50%|█████     | 151/300 [00:12<00:10, 14.28it/s] 52%|█████▏    | 155/300 [00:13<00:12, 11.20it/s] 54%|█████▎    | 161/300 [00:13<00:13, 10.55it/s] 56%|█████▌    | 167/300 [00:13<00:11, 11.98it/s]
+[rollout 5/60] time_s=15.05 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 168, 'Success_Rate': 1.0, 'Rzz_List': 168, 'Pos_List': 168, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:34,  1.40it/s]  2%|▏         | 5/300 [00:00<00:38,  7.66it/s]  3%|▎         | 9/300 [00:01<00:42,  6.84it/s]  5%|▌         | 16/300 [00:01<00:19, 14.29it/s]  7%|▋         | 20/300 [00:02<00:27, 10.32it/s]  8%|▊         | 25/300 [00:02<00:29,  9.26it/s] 11%|█         | 33/300 [00:03<00:26, 10.25it/s] 13%|█▎        | 40/300 [00:03<00:17, 14.79it/s] 15%|█▍        | 44/300 [00:04<00:22, 11.38it/s] 16%|█▋        | 49/300 [00:04<00:24, 10.04it/s] 19%|█▊        | 56/300 [00:04<00:16, 14.52it/s] 20%|██        | 60/300 [00:05<00:21, 11.25it/s] 22%|██▏       | 65/300 [00:06<00:23, 10.02it/s] 24%|██▍       | 72/300 [00:06<00:15, 14.53it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.33it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.09it/s] 29%|██▉       | 88/300 [00:07<00:14, 14.62it/s] 31%|███       | 92/300 [00:08<00:18, 11.36it/s] 32%|███▏      | 97/300 [00:08<00:20, 10.09it/s] 35%|███▍      | 104/300 [00:09<00:13, 14.55it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.31it/s] 38%|███▊      | 113/300 [00:10<00:18, 10.01it/s] 40%|███▉      | 119/300 [00:10<00:13, 13.84it/s] 41%|████      | 123/300 [00:11<00:16, 10.81it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.20it/s] 45%|████▌     | 135/300 [00:11<00:11, 13.97it/s] 46%|████▋     | 139/300 [00:12<00:14, 10.94it/s] 48%|████▊     | 145/300 [00:13<00:15, 10.28it/s] 50%|█████     | 151/300 [00:13<00:10, 14.02it/s] 52%|█████▏    | 155/300 [00:13<00:13, 10.97it/s] 54%|█████▎    | 161/300 [00:14<00:13, 10.28it/s] 56%|█████▌    | 167/300 [00:14<00:09, 14.02it/s] 57%|█████▋    | 170/300 [00:15<00:11, 11.21it/s]
+[rollout 6/60] time_s=16.28 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 171, 'Success_Rate': 1.0, 'Rzz_List': 171, 'Pos_List': 171, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:31,  1.41it/s]  2%|▏         | 5/300 [00:00<00:37,  7.79it/s]  3%|▎         | 9/300 [00:01<00:41,  7.05it/s]  6%|▌         | 17/300 [00:02<00:30,  9.42it/s]  8%|▊         | 25/300 [00:02<00:26, 10.45it/s] 11%|█         | 33/300 [00:03<00:24, 11.00it/s] 13%|█▎        | 40/300 [00:03<00:17, 15.28it/s] 15%|█▍        | 44/300 [00:04<00:21, 11.93it/s] 16%|█▋        | 49/300 [00:04<00:23, 10.48it/s] 19%|█▊        | 56/300 [00:04<00:16, 14.94it/s] 20%|██        | 60/300 [00:05<00:20, 11.54it/s] 22%|██▏       | 65/300 [00:06<00:22, 10.25it/s] 24%|██▍       | 72/300 [00:06<00:15, 14.75it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.43it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.15it/s] 29%|██▉       | 88/300 [00:07<00:14, 14.68it/s] 31%|███       | 92/300 [00:08<00:18, 11.35it/s] 32%|███▏      | 97/300 [00:08<00:20, 10.03it/s] 35%|███▍      | 104/300 [00:08<00:13, 14.49it/s] 36%|███▌      | 108/300 [00:09<00:17, 11.20it/s] 38%|███▊      | 113/300 [00:10<00:18,  9.95it/s] 40%|███▉      | 119/300 [00:10<00:13, 13.77it/s] 41%|████      | 123/300 [00:10<00:16, 10.85it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.23it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.00it/s] 46%|████▋     | 139/300 [00:12<00:14, 10.97it/s] 48%|████▊     | 145/300 [00:12<00:15, 10.30it/s] 50%|█████     | 151/300 [00:13<00:10, 14.04it/s] 52%|█████▏    | 155/300 [00:13<00:13, 10.96it/s] 54%|█████▎    | 161/300 [00:14<00:13, 10.28it/s] 56%|█████▌    | 167/300 [00:14<00:09, 14.05it/s] 56%|█████▌    | 168/300 [00:15<00:11, 11.18it/s]
+[rollout 7/60] time_s=16.18 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 169, 'Success_Rate': 1.0, 'Rzz_List': 169, 'Pos_List': 169, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:32,  1.40it/s]  3%|▎         | 8/300 [00:00<00:22, 12.72it/s]  4%|▍         | 12/300 [00:01<00:31,  9.07it/s]  6%|▌         | 17/300 [00:02<00:32,  8.60it/s]  8%|▊         | 24/300 [00:02<00:19, 14.49it/s]  9%|▉         | 28/300 [00:02<00:24, 10.92it/s] 11%|█         | 33/300 [00:03<00:27,  9.77it/s] 13%|█▎        | 40/300 [00:03<00:17, 14.79it/s] 15%|█▍        | 44/300 [00:04<00:22, 11.32it/s] 16%|█▋        | 49/300 [00:04<00:24, 10.05it/s] 19%|█▊        | 56/300 [00:04<00:16, 14.76it/s] 20%|██        | 60/300 [00:05<00:21, 11.40it/s] 22%|██▏       | 65/300 [00:06<00:23, 10.09it/s] 24%|██▍       | 72/300 [00:06<00:15, 14.68it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.37it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.09it/s] 29%|██▉       | 88/300 [00:07<00:14, 14.65it/s] 31%|███       | 92/300 [00:08<00:18, 11.37it/s] 32%|███▏      | 97/300 [00:08<00:20, 10.11it/s] 35%|███▍      | 104/300 [00:08<00:13, 14.65it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.35it/s] 38%|███▊      | 113/300 [00:10<00:18, 10.06it/s] 40%|███▉      | 119/300 [00:10<00:13, 13.92it/s] 41%|████      | 123/300 [00:10<00:16, 10.89it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.24it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.03it/s] 46%|████▋     | 139/300 [00:12<00:14, 10.96it/s] 48%|████▊     | 145/300 [00:12<00:15, 10.26it/s] 50%|█████     | 151/300 [00:12<00:10, 14.02it/s] 52%|█████▏    | 155/300 [00:13<00:13, 10.99it/s] 54%|█████▎    | 161/300 [00:14<00:13, 10.24it/s] 56%|█████▌    | 167/300 [00:14<00:09, 14.00it/s] 57%|█████▋    | 171/300 [00:14<00:11, 10.95it/s] 59%|█████▊    | 176/300 [00:15<00:11, 11.25it/s]
+[rollout 8/60] time_s=16.80 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 177, 'Success_Rate': 1.0, 'Rzz_List': 177, 'Pos_List': 177, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:33,  1.40it/s]  3%|▎         | 8/300 [00:00<00:22, 12.75it/s]  4%|▍         | 12/300 [00:01<00:31,  9.12it/s]  6%|▌         | 17/300 [00:02<00:32,  8.58it/s]  8%|▊         | 25/300 [00:02<00:27, 10.05it/s] 11%|█         | 33/300 [00:03<00:24, 10.81it/s] 13%|█▎        | 40/300 [00:03<00:17, 15.14it/s] 15%|█▍        | 44/300 [00:04<00:21, 11.75it/s] 16%|█▋        | 49/300 [00:04<00:24, 10.39it/s] 19%|█▊        | 56/300 [00:04<00:16, 14.85it/s] 20%|██        | 60/300 [00:05<00:20, 11.54it/s] 22%|██▏       | 65/300 [00:06<00:22, 10.22it/s] 24%|██▍       | 72/300 [00:06<00:15, 14.75it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.40it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.13it/s] 29%|██▉       | 88/300 [00:07<00:14, 14.67it/s] 31%|███       | 92/300 [00:08<00:18, 11.40it/s] 32%|███▏      | 97/300 [00:08<00:20, 10.11it/s] 35%|███▍      | 104/300 [00:08<00:13, 14.66it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.34it/s] 38%|███▊      | 113/300 [00:10<00:18, 10.09it/s] 40%|███▉      | 119/300 [00:10<00:12, 13.95it/s] 41%|████      | 123/300 [00:10<00:16, 10.93it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.27it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.06it/s] 46%|████▋     | 139/300 [00:12<00:14, 11.00it/s] 48%|████▊     | 145/300 [00:12<00:15, 10.29it/s] 50%|█████     | 151/300 [00:12<00:10, 14.05it/s] 52%|█████▏    | 155/300 [00:13<00:13, 11.02it/s] 54%|█████▎    | 161/300 [00:14<00:13, 10.34it/s] 56%|█████▌    | 167/300 [00:14<00:09, 14.10it/s] 57%|█████▋    | 171/300 [00:14<00:11, 11.07it/s] 59%|█████▉    | 177/300 [00:15<00:11, 10.39it/s] 61%|██████    | 183/300 [00:15<00:08, 14.17it/s] 62%|██████▏   | 187/300 [00:16<00:10, 11.13it/s] 62%|██████▏   | 187/300 [00:16<00:09, 11.45it/s]
+[rollout 9/60] time_s=17.47 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 188, 'Success_Rate': 1.0, 'Rzz_List': 188, 'Pos_List': 188, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:32,  1.41it/s]  3%|▎         | 8/300 [00:00<00:22, 12.84it/s]  4%|▍         | 13/300 [00:01<00:28,  9.98it/s]  6%|▌         | 17/300 [00:02<00:33,  8.42it/s]  8%|▊         | 25/300 [00:02<00:27,  9.93it/s] 11%|█         | 33/300 [00:03<00:24, 10.73it/s] 13%|█▎        | 40/300 [00:03<00:17, 15.09it/s] 15%|█▍        | 44/300 [00:04<00:21, 11.73it/s] 16%|█▋        | 49/300 [00:04<00:24, 10.35it/s] 19%|█▊        | 56/300 [00:04<00:16, 14.83it/s] 20%|██        | 60/300 [00:05<00:20, 11.50it/s] 22%|██▏       | 65/300 [00:06<00:23, 10.19it/s] 24%|██▍       | 72/300 [00:06<00:15, 14.73it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.41it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.13it/s] 29%|██▉       | 88/300 [00:07<00:14, 14.66it/s] 31%|███       | 92/300 [00:08<00:18, 11.36it/s] 32%|███▏      | 97/300 [00:08<00:20, 10.08it/s] 35%|███▍      | 104/300 [00:08<00:13, 14.54it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.33it/s] 38%|███▊      | 113/300 [00:10<00:18, 10.05it/s] 40%|███▉      | 119/300 [00:10<00:13, 13.90it/s] 41%|████      | 123/300 [00:10<00:16, 10.86it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.23it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.01it/s] 46%|████▋     | 139/300 [00:12<00:14, 10.99it/s] 48%|████▊     | 145/300 [00:12<00:15, 10.32it/s] 50%|█████     | 151/300 [00:12<00:10, 14.09it/s] 52%|█████▏    | 155/300 [00:13<00:13, 11.03it/s] 54%|█████▎    | 161/300 [00:14<00:13, 10.32it/s] 56%|█████▌    | 168/300 [00:14<00:08, 14.72it/s] 56%|█████▌    | 168/300 [00:14<00:11, 11.25it/s]
+[rollout 10/60] time_s=16.07 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 169, 'Success_Rate': 1.0, 'Rzz_List': 169, 'Pos_List': 169, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:31,  1.41it/s]  3%|▎         | 8/300 [00:00<00:22, 12.81it/s]  4%|▍         | 12/300 [00:01<00:31,  9.11it/s]  6%|▌         | 17/300 [00:02<00:32,  8.64it/s]  8%|▊         | 24/300 [00:02<00:18, 14.55it/s]  9%|▉         | 28/300 [00:02<00:24, 10.94it/s] 11%|█         | 33/300 [00:03<00:27,  9.76it/s] 13%|█▎        | 40/300 [00:03<00:17, 14.77it/s] 15%|█▍        | 44/300 [00:04<00:22, 11.28it/s] 16%|█▋        | 49/300 [00:04<00:25, 10.02it/s] 19%|█▊        | 56/300 [00:04<00:16, 14.73it/s] 20%|██        | 60/300 [00:05<00:21, 11.29it/s] 22%|██▏       | 65/300 [00:06<00:23, 10.04it/s] 24%|██▍       | 72/300 [00:06<00:15, 14.61it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.34it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.08it/s] 29%|██▉       | 88/300 [00:07<00:14, 14.62it/s] 31%|███       | 92/300 [00:08<00:18, 11.36it/s] 32%|███▏      | 97/300 [00:08<00:20, 10.07it/s] 35%|███▍      | 104/300 [00:08<00:13, 14.55it/s] 36%|███▌      | 108/300 [00:09<00:17, 11.29it/s] 38%|███▊      | 113/300 [00:10<00:18, 10.02it/s] 40%|███▉      | 119/300 [00:10<00:13, 13.85it/s] 41%|████      | 123/300 [00:10<00:16, 10.88it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.24it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.00it/s] 46%|████▋     | 139/300 [00:12<00:14, 11.00it/s] 48%|████▊     | 145/300 [00:12<00:14, 10.34it/s] 50%|█████     | 151/300 [00:12<00:10, 14.11it/s] 52%|█████▏    | 155/300 [00:13<00:13, 11.02it/s] 54%|█████▎    | 161/300 [00:14<00:13, 10.26it/s] 56%|█████▌    | 168/300 [00:14<00:08, 14.67it/s] 56%|█████▌    | 168/300 [00:14<00:11, 11.23it/s]
+[rollout 11/60] time_s=16.11 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 169, 'Success_Rate': 1.0, 'Rzz_List': 169, 'Pos_List': 169, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:37,  1.38it/s]  3%|▎         | 8/300 [00:00<00:23, 12.58it/s]  4%|▍         | 13/300 [00:01<00:29,  9.88it/s]  6%|▌         | 17/300 [00:02<00:33,  8.40it/s]  8%|▊         | 25/300 [00:02<00:27,  9.92it/s] 11%|█         | 33/300 [00:03<00:24, 10.72it/s] 13%|█▎        | 40/300 [00:03<00:17, 15.09it/s] 15%|█▍        | 44/300 [00:04<00:21, 11.72it/s] 16%|█▋        | 49/300 [00:04<00:24, 10.39it/s] 19%|█▊        | 56/300 [00:04<00:16, 14.90it/s] 20%|██        | 60/300 [00:05<00:20, 11.50it/s] 22%|██▏       | 65/300 [00:06<00:23, 10.21it/s] 24%|██▍       | 72/300 [00:06<00:15, 14.75it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.42it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.15it/s] 29%|██▉       | 88/300 [00:07<00:14, 14.71it/s] 31%|███       | 92/300 [00:08<00:18, 11.42it/s] 32%|███▏      | 97/300 [00:08<00:20, 10.11it/s] 35%|███▍      | 104/300 [00:08<00:13, 14.60it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.35it/s] 38%|███▊      | 113/300 [00:10<00:18, 10.07it/s] 40%|███▉      | 119/300 [00:10<00:13, 13.91it/s] 41%|████      | 123/300 [00:10<00:16, 10.90it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.26it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.06it/s] 46%|████▋     | 139/300 [00:12<00:14, 10.97it/s] 48%|████▊     | 145/300 [00:12<00:15, 10.29it/s] 50%|█████     | 151/300 [00:12<00:10, 14.03it/s] 52%|█████▏    | 155/300 [00:13<00:13, 10.99it/s] 54%|█████▎    | 161/300 [00:14<00:13, 10.32it/s] 56%|█████▌    | 167/300 [00:14<00:09, 14.09it/s] 56%|█████▋    | 169/300 [00:14<00:11, 11.30it/s]
+[rollout 12/60] time_s=16.10 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 170, 'Success_Rate': 1.0, 'Rzz_List': 170, 'Pos_List': 170, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:30,  1.42it/s]  3%|▎         | 8/300 [00:00<00:22, 12.84it/s]  4%|▍         | 12/300 [00:01<00:31,  9.16it/s]  6%|▌         | 17/300 [00:02<00:32,  8.74it/s]  8%|▊         | 25/300 [00:02<00:26, 10.23it/s] 11%|█         | 33/300 [00:03<00:24, 11.01it/s] 13%|█▎        | 40/300 [00:03<00:16, 15.44it/s] 15%|█▍        | 44/300 [00:04<00:21, 12.04it/s] 16%|█▋        | 49/300 [00:04<00:23, 10.61it/s] 19%|█▊        | 56/300 [00:04<00:16, 15.19it/s] 20%|██        | 60/300 [00:05<00:20, 11.82it/s] 22%|██▏       | 65/300 [00:05<00:22, 10.52it/s] 24%|██▍       | 72/300 [00:06<00:15, 15.14it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.77it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.43it/s] 29%|██▉       | 88/300 [00:07<00:14, 15.08it/s] 31%|███       | 92/300 [00:07<00:17, 11.70it/s] 32%|███▏      | 97/300 [00:08<00:19, 10.38it/s] 35%|███▍      | 104/300 [00:08<00:13, 15.01it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.62it/s] 38%|███▊      | 113/300 [00:09<00:18, 10.30it/s] 40%|████      | 120/300 [00:10<00:12, 14.85it/s] 41%|████▏     | 124/300 [00:10<00:15, 11.55it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.24it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.13it/s] 46%|████▋     | 139/300 [00:11<00:14, 11.14it/s] 48%|████▊     | 145/300 [00:12<00:14, 10.51it/s] 50%|█████     | 151/300 [00:12<00:10, 14.40it/s] 52%|█████▏    | 155/300 [00:13<00:12, 11.28it/s] 54%|█████▎    | 161/300 [00:13<00:13, 10.59it/s] 56%|█████▌    | 167/300 [00:14<00:09, 14.45it/s] 57%|█████▋    | 171/300 [00:14<00:11, 11.33it/s] 58%|█████▊    | 173/300 [00:14<00:10, 11.80it/s]
+[rollout 13/60] time_s=15.81 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 174, 'Success_Rate': 1.0, 'Rzz_List': 174, 'Pos_List': 174, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:24,  1.46it/s]  3%|▎         | 8/300 [00:00<00:22, 13.25it/s]  4%|▍         | 13/300 [00:01<00:27, 10.26it/s]  6%|▌         | 17/300 [00:01<00:32,  8.69it/s]  8%|▊         | 25/300 [00:02<00:26, 10.27it/s] 11%|█         | 33/300 [00:03<00:24, 11.05it/s] 13%|█▎        | 40/300 [00:03<00:16, 15.52it/s] 15%|█▍        | 44/300 [00:03<00:21, 12.05it/s] 16%|█▋        | 49/300 [00:04<00:23, 10.66it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.26it/s] 20%|██        | 60/300 [00:05<00:20, 11.80it/s] 22%|██▏       | 65/300 [00:05<00:22, 10.49it/s] 24%|██▍       | 72/300 [00:05<00:15, 15.13it/s] 25%|██▌       | 76/300 [00:06<00:19, 11.73it/s] 27%|██▋       | 81/300 [00:07<00:21, 10.40it/s] 29%|██▉       | 88/300 [00:07<00:14, 15.04it/s] 31%|███       | 92/300 [00:07<00:17, 11.69it/s] 32%|███▏      | 97/300 [00:08<00:19, 10.38it/s] 35%|███▍      | 104/300 [00:08<00:13, 14.96it/s] 36%|███▌      | 108/300 [00:09<00:16, 11.61it/s] 38%|███▊      | 113/300 [00:09<00:18, 10.29it/s] 40%|████      | 120/300 [00:09<00:12, 14.83it/s] 41%|████▏     | 124/300 [00:10<00:15, 11.55it/s] 43%|████▎     | 129/300 [00:11<00:16, 10.24it/s] 45%|████▌     | 135/300 [00:11<00:11, 14.14it/s] 46%|████▋     | 139/300 [00:11<00:14, 11.09it/s] 48%|████▊     | 145/300 [00:12<00:14, 10.45it/s] 50%|█████     | 151/300 [00:12<00:10, 14.33it/s] 52%|█████▏    | 155/300 [00:13<00:12, 11.25it/s] 54%|█████▎    | 161/300 [00:13<00:13, 10.58it/s] 56%|█████▌    | 168/300 [00:13<00:08, 15.08it/s] 56%|█████▋    | 169/300 [00:14<00:11, 11.61it/s]
+[rollout 14/60] time_s=15.66 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 170, 'Success_Rate': 1.0, 'Rzz_List': 170, 'Pos_List': 170, 'Mode': 'baseline'}
+  0%|          | 0/300 [00:00<?, ?it/s]

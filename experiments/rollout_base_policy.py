@@ -24,6 +24,17 @@ def get_metrics(env, body_name='Can_main'): # 'payload_root' for Transport
     bid = sim.model.body_name2id(body_name)
     return sim.data.body_xmat[bid].reshape(3,3)[2,2], sim.data.body_xpos[bid].copy()
 
+def to_jsonable(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_jsonable(v) for v in obj]
+    return obj
+
 def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=['agentview'], render=False, init_state=None):
     """
     Helper function to carry out rollouts. Supports on-screen rendering, off-screen rendering to a video, 
@@ -135,6 +146,9 @@ def run_diffusion(args):
     if args.fix_init_state == "y":
         env.reset()
         init_state = env.get_state()
+        init_state_path = os.path.join(run_output_path, "init_state.json")
+        with open(init_state_path, "w", encoding="utf-8") as f:
+            json.dump(to_jsonable(init_state), f, indent=2)
     for rollout_i in range(args.n_rollouts):
         rollout_num = rollout_i + 1
         video_writer = None

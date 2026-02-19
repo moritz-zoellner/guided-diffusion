@@ -1,1990 +1,0 @@
-Starting sample-and-rank via SLURM
-[robosuite WARNING] No private macro file found! (macros.py:53)
-[robosuite WARNING] It is recommended to use a private macro file (macros.py:54)
-[robosuite WARNING] To setup, run: python /home/zoellner/src/guided-diffusion/robosuite/robosuite/scripts/setup_macros.py (macros.py:55)
-[robosuite WARNING] Could not import robosuite_models. Some robots may not be available. If you want to use these robots, please install robosuite_models from source (https://github.com/ARISE-Initiative/robosuite_models) or through pip install. (__init__.py:30)
-Created environment with name PickPlaceCan
-Action size is 7
-Created environment with name PickPlaceCan
-Action size is 7
-============= Loaded Config =============
-{
-    "algo_name": "diffusion_policy",
-    "experiment": {
-        "name": "can_mh_lowdim",
-        "validate": false,
-        "logging": {
-            "terminal_output_to_txt": true,
-            "log_tb": true,
-            "log_wandb": true,
-            "wandb_proj_name": "guided_diffusion"
-        },
-        "save": {
-            "enabled": true,
-            "every_n_seconds": null,
-            "every_n_epochs": 50,
-            "epochs": [],
-            "on_best_validation": false,
-            "on_best_rollout_return": false,
-            "on_best_rollout_success_rate": true
-        },
-        "epoch_every_n_steps": 100,
-        "validation_epoch_every_n_steps": 10,
-        "env": null,
-        "additional_envs": null,
-        "render": false,
-        "render_video": true,
-        "keep_all_videos": true,
-        "video_skip": 2,
-        "rollout": {
-            "enabled": true,
-            "n": 10,
-            "horizon": 200,
-            "rate": 50,
-            "warmstart": 0,
-            "terminate_on_success": true
-        },
-        "env_meta_update_dict": {},
-        "ckpt_path": null
-    },
-    "train": {
-        "data": [
-            {
-                "path": "/home/zoellner/src/guided-diffusion/data/can/mh/low_dim_v15.hdf5"
-            }
-        ],
-        "output_dir": "/scratch/gilbreth/zoellner/diffusion_runs/",
-        "normalize_weights_by_ds_size": false,
-        "num_data_workers": 0,
-        "hdf5_cache_mode": "all",
-        "hdf5_use_swmr": true,
-        "hdf5_load_next_obs": false,
-        "hdf5_normalize_obs": false,
-        "hdf5_filter_key": null,
-        "hdf5_validation_filter_key": null,
-        "seq_length": 16,
-        "pad_seq_length": true,
-        "frame_stack": 2,
-        "pad_frame_stack": true,
-        "dataset_keys": [
-            "actions",
-            "rewards",
-            "dones"
-        ],
-        "action_keys": [
-            "actions"
-        ],
-        "action_config": {
-            "actions": {
-                "normalization": null
-            }
-        },
-        "goal_mode": null,
-        "cuda": true,
-        "batch_size": 100,
-        "num_epochs": 2000,
-        "seed": 1,
-        "max_grad_norm": null
-    },
-    "algo": {
-        "optim_params": {
-            "policy": {
-                "optimizer_type": "adamw",
-                "learning_rate": {
-                    "initial": 0.0001,
-                    "decay_factor": 0.1,
-                    "step_every_batch": true,
-                    "scheduler_type": "cosine",
-                    "num_cycles": 0.5,
-                    "warmup_steps": 500,
-                    "epoch_schedule": []
-                },
-                "regularization": {
-                    "L2": 1e-06
-                },
-                "num_train_batches": 100,
-                "num_epochs": 2000
-            }
-        },
-        "horizon": {
-            "observation_horizon": 2,
-            "action_horizon": 8,
-            "prediction_horizon": 16
-        },
-        "unet": {
-            "enabled": true,
-            "diffusion_step_embed_dim": 256,
-            "down_dims": [
-                256,
-                512,
-                1024
-            ],
-            "kernel_size": 5,
-            "n_groups": 8
-        },
-        "ema": {
-            "enabled": true,
-            "power": 0.75
-        },
-        "ddpm": {
-            "enabled": true,
-            "num_train_timesteps": 100,
-            "num_inference_timesteps": 100,
-            "beta_schedule": "squaredcos_cap_v2",
-            "clip_sample": true,
-            "prediction_type": "epsilon"
-        },
-        "ddim": {
-            "enabled": false,
-            "num_train_timesteps": 100,
-            "num_inference_timesteps": 10,
-            "beta_schedule": "squaredcos_cap_v2",
-            "clip_sample": true,
-            "set_alpha_to_one": true,
-            "steps_offset": 0,
-            "prediction_type": "epsilon"
-        }
-    },
-    "observation": {
-        "modalities": {
-            "obs": {
-                "low_dim": [
-                    "robot0_eef_pos",
-                    "robot0_eef_quat",
-                    "robot0_gripper_qpos",
-                    "object"
-                ],
-                "rgb": [],
-                "depth": [],
-                "scan": []
-            },
-            "goal": {
-                "low_dim": [],
-                "rgb": [],
-                "depth": [],
-                "scan": []
-            }
-        },
-        "encoder": {
-            "low_dim": {
-                "core_class": null,
-                "core_kwargs": {},
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {}
-            },
-            "rgb": {
-                "core_class": "VisualCore",
-                "core_kwargs": {},
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {}
-            },
-            "depth": {
-                "core_class": "VisualCore",
-                "core_kwargs": {},
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {}
-            },
-            "scan": {
-                "core_class": "ScanCore",
-                "core_kwargs": {},
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {}
-            }
-        }
-    },
-    "meta": {
-        "hp_base_config_file": null,
-        "hp_keys": [],
-        "hp_values": []
-    }
-}
-
-============= Initialized Observation Utils with Obs Spec =============
-
-using obs modality: low_dim with keys: ['object', 'robot0_gripper_qpos', 'robot0_eef_pos', 'robot0_eef_quat']
-using obs modality: rgb with keys: []
-using obs modality: depth with keys: []
-using obs modality: scan with keys: []
-number of parameters: 6.587828e+07
-============= Loaded Policy =============
-DiffusionPolicyUNet (
-  ModuleDict(
-    (policy): ModuleDict(
-      (obs_encoder): ObservationGroupEncoder(
-          group=obs
-          ObservationEncoder(
-              Key(
-                  name=object
-                  shape=[14]
-                  modality=low_dim
-                  randomizer=ModuleList(
-                    (0): None
-                  )
-                  net=None
-                  sharing_from=None
-              )
-              Key(
-                  name=robot0_eef_pos
-                  shape=[3]
-                  modality=low_dim
-                  randomizer=ModuleList(
-                    (0): None
-                  )
-                  net=None
-                  sharing_from=None
-              )
-              Key(
-                  name=robot0_eef_quat
-                  shape=[4]
-                  modality=low_dim
-                  randomizer=ModuleList(
-                    (0): None
-                  )
-                  net=None
-                  sharing_from=None
-              )
-              Key(
-                  name=robot0_gripper_qpos
-                  shape=[2]
-                  modality=low_dim
-                  randomizer=ModuleList(
-                    (0): None
-                  )
-                  net=None
-                  sharing_from=None
-              )
-              output_shape=[23]
-          )
-      )
-      (noise_pred_net): ConditionalUnet1D(
-        (mid_modules): ModuleList(
-          (0-1): 2 x ConditionalResidualBlock1D(
-            (blocks): ModuleList(
-              (0-1): 2 x Conv1dBlock(
-                (block): Sequential(
-                  (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
-                  (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
-                  (2): Mish()
-                )
-              )
-            )
-            (cond_encoder): Sequential(
-              (0): Mish()
-              (1): Linear(in_features=302, out_features=2048, bias=True)
-              (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-            )
-            (residual_conv): Identity()
-          )
-        )
-        (diffusion_step_encoder): Sequential(
-          (0): SinusoidalPosEmb()
-          (1): Linear(in_features=256, out_features=1024, bias=True)
-          (2): Mish()
-          (3): Linear(in_features=1024, out_features=256, bias=True)
-        )
-        (up_modules): ModuleList(
-          (0): ModuleList(
-            (0): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(2048, 512, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-                (1): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=1024, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Conv1d(2048, 512, kernel_size=(1,), stride=(1,))
-            )
-            (1): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0-1): 2 x Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=1024, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Identity()
-            )
-            (2): Upsample1d(
-              (conv): ConvTranspose1d(512, 512, kernel_size=(4,), stride=(2,), padding=(1,))
-            )
-          )
-          (1): ModuleList(
-            (0): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(1024, 256, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-                (1): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=512, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Conv1d(1024, 256, kernel_size=(1,), stride=(1,))
-            )
-            (1): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0-1): 2 x Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=512, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Identity()
-            )
-            (2): Upsample1d(
-              (conv): ConvTranspose1d(256, 256, kernel_size=(4,), stride=(2,), padding=(1,))
-            )
-          )
-        )
-        (down_modules): ModuleList(
-          (0): ModuleList(
-            (0): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(7, 256, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-                (1): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=512, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Conv1d(7, 256, kernel_size=(1,), stride=(1,))
-            )
-            (1): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0-1): 2 x Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=512, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Identity()
-            )
-            (2): Downsample1d(
-              (conv): Conv1d(256, 256, kernel_size=(3,), stride=(2,), padding=(1,))
-            )
-          )
-          (1): ModuleList(
-            (0): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(256, 512, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-                (1): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=1024, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Conv1d(256, 512, kernel_size=(1,), stride=(1,))
-            )
-            (1): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0-1): 2 x Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=1024, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Identity()
-            )
-            (2): Downsample1d(
-              (conv): Conv1d(512, 512, kernel_size=(3,), stride=(2,), padding=(1,))
-            )
-          )
-          (2): ModuleList(
-            (0): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(512, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-                (1): Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=2048, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Conv1d(512, 1024, kernel_size=(1,), stride=(1,))
-            )
-            (1): ConditionalResidualBlock1D(
-              (blocks): ModuleList(
-                (0-1): 2 x Conv1dBlock(
-                  (block): Sequential(
-                    (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
-                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
-                    (2): Mish()
-                  )
-                )
-              )
-              (cond_encoder): Sequential(
-                (0): Mish()
-                (1): Linear(in_features=302, out_features=2048, bias=True)
-                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
-              )
-              (residual_conv): Identity()
-            )
-            (2): Identity()
-          )
-        )
-        (final_conv): Sequential(
-          (0): Conv1dBlock(
-            (block): Sequential(
-              (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
-              (1): GroupNorm(8, 256, eps=1e-05, affine=True)
-              (2): Mish()
-            )
-          )
-          (1): Conv1d(256, 7, kernel_size=(1,), stride=(1,))
-        )
-      )
-    )
-  )
-)
-Starting Rollouts
-  0%|          | 0/300 [00:00<?, ?it/s]ObservationKeyToModalityDict: robot0_joint_pos not found, adding robot0_joint_pos to mapping with assumed low_dim modality!
-ObservationKeyToModalityDict: robot0_joint_pos_cos not found, adding robot0_joint_pos_cos to mapping with assumed low_dim modality!
-ObservationKeyToModalityDict: robot0_joint_pos_sin not found, adding robot0_joint_pos_sin to mapping with assumed low_dim modality!
-ObservationKeyToModalityDict: robot0_joint_vel not found, adding robot0_joint_vel to mapping with assumed low_dim modality!
-ObservationKeyToModalityDict: robot0_eef_quat_site not found, adding robot0_eef_quat_site to mapping with assumed low_dim modality!
-ObservationKeyToModalityDict: robot0_gripper_qvel not found, adding robot0_gripper_qvel to mapping with assumed low_dim modality!
-ObservationKeyToModalityDict: lang_emb not found, adding lang_emb to mapping with assumed low_dim modality!
-ObservationKeyToModalityDict: timesteps not found, adding timesteps to mapping with assumed low_dim modality!
-ObservationKeyToModalityDict: actions not found, adding actions to mapping with assumed low_dim modality!
-  0%|          | 1/300 [00:02<12:29,  2.51s/it]  3%|▎         | 8/300 [00:02<01:10,  4.14it/s]  4%|▍         | 13/300 [00:03<00:51,  5.53it/s]  6%|▌         | 17/300 [00:03<00:47,  6.01it/s]  8%|▊         | 25/300 [00:04<00:33,  8.25it/s] 11%|█         | 33/300 [00:04<00:27,  9.74it/s] 13%|█▎        | 40/300 [00:05<00:18, 13.82it/s] 15%|█▍        | 44/300 [00:05<00:22, 11.43it/s] 16%|█▋        | 49/300 [00:06<00:23, 10.47it/s] 19%|█▊        | 56/300 [00:06<00:16, 15.05it/s] 20%|██        | 60/300 [00:06<00:20, 11.99it/s] 22%|██▏       | 65/300 [00:07<00:21, 10.75it/s] 24%|██▎       | 71/300 [00:07<00:15, 14.74it/s] 25%|██▌       | 75/300 [00:08<00:19, 11.65it/s] 27%|██▋       | 81/300 [00:08<00:19, 11.03it/s] 29%|██▉       | 88/300 [00:08<00:13, 15.66it/s] 31%|███       | 92/300 [00:09<00:17, 12.23it/s] 32%|███▏      | 97/300 [00:10<00:18, 10.86it/s] 35%|███▍      | 104/300 [00:10<00:12, 15.54it/s] 36%|███▌      | 108/300 [00:10<00:15, 12.10it/s] 38%|███▊      | 113/300 [00:11<00:17, 10.77it/s] 40%|████      | 120/300 [00:11<00:11, 15.47it/s] 41%|████▏     | 124/300 [00:11<00:14, 12.11it/s] 43%|████▎     | 129/300 [00:12<00:15, 10.80it/s] 43%|████▎     | 129/300 [00:12<00:16, 10.26it/s]
-[rollout 1/40] time_s=13.64 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 130, 'Success_Rate': 1.0, 'Rzz_List': 130, 'Pos_List': 130, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:13,  1.55it/s]  3%|▎         | 9/300 [00:01<00:35,  8.09it/s]  6%|▌         | 17/300 [00:01<00:27, 10.27it/s]  8%|▊         | 25/300 [00:02<00:24, 11.31it/s] 11%|█         | 33/300 [00:03<00:22, 11.89it/s] 13%|█▎        | 40/300 [00:03<00:15, 16.33it/s] 15%|█▍        | 44/300 [00:03<00:20, 12.77it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.27it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.96it/s] 20%|██        | 60/300 [00:05<00:19, 12.41it/s] 22%|██▏       | 65/300 [00:05<00:21, 10.93it/s] 24%|██▎       | 71/300 [00:05<00:15, 14.93it/s] 25%|██▌       | 75/300 [00:06<00:19, 11.69it/s] 27%|██▋       | 81/300 [00:06<00:19, 11.00it/s] 29%|██▉       | 87/300 [00:07<00:14, 14.96it/s] 30%|███       | 91/300 [00:07<00:17, 11.71it/s] 32%|███▏      | 97/300 [00:08<00:18, 10.95it/s] 34%|███▍      | 103/300 [00:08<00:13, 14.81it/s] 36%|███▌      | 107/300 [00:08<00:16, 11.65it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.93it/s] 40%|███▉      | 119/300 [00:09<00:12, 14.82it/s] 41%|████      | 123/300 [00:10<00:15, 11.73it/s] 41%|████      | 123/300 [00:10<00:14, 12.02it/s]
-[rollout 2/40] time_s=11.31 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 124, 'Success_Rate': 1.0, 'Rzz_List': 124, 'Pos_List': 124, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:12,  1.55it/s]  3%|▎         | 9/300 [00:01<00:35,  8.09it/s]  6%|▌         | 17/300 [00:01<00:27, 10.30it/s]  8%|▊         | 25/300 [00:02<00:24, 11.34it/s] 11%|█         | 33/300 [00:03<00:22, 11.92it/s] 13%|█▎        | 40/300 [00:03<00:15, 16.35it/s] 15%|█▍        | 44/300 [00:03<00:19, 12.84it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.33it/s] 19%|█▊        | 56/300 [00:04<00:15, 16.03it/s] 20%|██        | 60/300 [00:05<00:19, 12.49it/s] 22%|██▏       | 65/300 [00:05<00:21, 11.07it/s] 24%|██▍       | 72/300 [00:05<00:14, 15.77it/s] 25%|██▌       | 76/300 [00:06<00:18, 12.27it/s] 27%|██▋       | 81/300 [00:06<00:20, 10.90it/s] 29%|██▉       | 88/300 [00:06<00:13, 15.64it/s] 31%|███       | 92/300 [00:07<00:17, 12.19it/s] 32%|███▏      | 97/300 [00:08<00:18, 10.85it/s] 35%|███▍      | 104/300 [00:08<00:12, 15.64it/s] 36%|███▌      | 108/300 [00:08<00:15, 12.19it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.85it/s] 40%|████      | 120/300 [00:09<00:11, 15.65it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.19it/s] 42%|████▏     | 126/300 [00:10<00:13, 12.44it/s]
-[rollout 3/40] time_s=11.22 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 127, 'Success_Rate': 1.0, 'Rzz_List': 127, 'Pos_List': 127, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:11,  1.56it/s]  3%|▎         | 9/300 [00:01<00:35,  8.10it/s]  6%|▌         | 17/300 [00:01<00:27, 10.28it/s]  8%|▊         | 25/300 [00:02<00:24, 11.33it/s] 11%|█         | 33/300 [00:03<00:22, 11.90it/s] 14%|█▎        | 41/300 [00:03<00:21, 12.21it/s] 16%|█▌        | 48/300 [00:03<00:15, 16.34it/s] 17%|█▋        | 52/300 [00:04<00:19, 12.88it/s] 19%|█▉        | 57/300 [00:05<00:21, 11.34it/s] 21%|██▏       | 64/300 [00:05<00:14, 15.88it/s] 23%|██▎       | 68/300 [00:05<00:18, 12.38it/s] 24%|██▍       | 73/300 [00:06<00:20, 10.92it/s] 26%|██▋       | 79/300 [00:06<00:14, 14.87it/s] 28%|██▊       | 83/300 [00:06<00:18, 11.70it/s] 30%|██▉       | 89/300 [00:07<00:19, 11.02it/s] 32%|███▏      | 96/300 [00:07<00:13, 15.63it/s] 33%|███▎      | 100/300 [00:08<00:16, 12.17it/s] 35%|███▌      | 105/300 [00:08<00:18, 10.80it/s] 37%|███▋      | 112/300 [00:08<00:12, 15.43it/s] 39%|███▊      | 116/300 [00:09<00:15, 12.06it/s] 40%|████      | 121/300 [00:10<00:16, 10.76it/s] 43%|████▎     | 128/300 [00:10<00:11, 15.47it/s] 43%|████▎     | 129/300 [00:10<00:14, 11.96it/s]
-[rollout 4/40] time_s=11.87 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 130, 'Success_Rate': 1.0, 'Rzz_List': 130, 'Pos_List': 130, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:12,  1.55it/s]  3%|▎         | 8/300 [00:00<00:21, 13.90it/s]  4%|▍         | 13/300 [00:01<00:26, 10.71it/s]  6%|▌         | 17/300 [00:01<00:31,  9.07it/s]  8%|▊         | 25/300 [00:02<00:25, 10.65it/s] 11%|█         | 33/300 [00:03<00:23, 11.47it/s] 13%|█▎        | 40/300 [00:03<00:16, 16.08it/s] 15%|█▍        | 44/300 [00:03<00:20, 12.54it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.10it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.87it/s] 20%|██        | 60/300 [00:05<00:19, 12.34it/s] 22%|██▏       | 65/300 [00:05<00:21, 10.94it/s] 24%|██▍       | 72/300 [00:05<00:14, 15.78it/s] 25%|██▌       | 76/300 [00:06<00:18, 12.23it/s] 27%|██▋       | 81/300 [00:06<00:20, 10.85it/s] 29%|██▉       | 88/300 [00:07<00:13, 15.64it/s] 31%|███       | 92/300 [00:07<00:17, 12.14it/s] 32%|███▏      | 97/300 [00:08<00:18, 10.76it/s] 35%|███▍      | 104/300 [00:08<00:12, 15.46it/s] 36%|███▌      | 108/300 [00:08<00:15, 12.04it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.70it/s] 40%|████      | 120/300 [00:09<00:11, 15.38it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.01it/s] 43%|████▎     | 129/300 [00:10<00:15, 10.72it/s] 45%|████▌     | 136/300 [00:10<00:10, 15.52it/s] 47%|████▋     | 140/300 [00:11<00:13, 12.12it/s] 48%|████▊     | 145/300 [00:12<00:14, 10.79it/s] 51%|█████     | 152/300 [00:12<00:09, 15.64it/s] 52%|█████▏    | 156/300 [00:12<00:11, 12.18it/s] 54%|█████▎    | 161/300 [00:13<00:12, 10.81it/s] 56%|█████▌    | 168/300 [00:13<00:08, 15.65it/s] 57%|█████▋    | 172/300 [00:13<00:10, 12.19it/s] 59%|█████▉    | 177/300 [00:14<00:11, 10.81it/s] 61%|██████▏   | 184/300 [00:14<00:07, 15.55it/s] 63%|██████▎   | 188/300 [00:15<00:09, 12.08it/s] 64%|██████▍   | 193/300 [00:15<00:09, 10.74it/s] 67%|██████▋   | 200/300 [00:15<00:06, 15.53it/s] 68%|██████▊   | 204/300 [00:16<00:07, 12.09it/s] 70%|██████▉   | 209/300 [00:17<00:08, 10.78it/s] 72%|███████▏  | 216/300 [00:17<00:05, 15.58it/s] 73%|███████▎  | 220/300 [00:17<00:06, 12.13it/s] 75%|███████▌  | 225/300 [00:18<00:06, 10.78it/s] 77%|███████▋  | 232/300 [00:18<00:04, 15.58it/s] 79%|███████▊  | 236/300 [00:19<00:05, 12.12it/s] 80%|████████  | 241/300 [00:19<00:05, 10.78it/s] 83%|████████▎ | 248/300 [00:19<00:03, 15.59it/s] 84%|████████▍ | 252/300 [00:20<00:03, 12.16it/s] 86%|████████▌ | 257/300 [00:20<00:03, 10.83it/s] 88%|████████▊ | 264/300 [00:20<00:02, 15.66it/s] 89%|████████▉ | 268/300 [00:21<00:02, 12.17it/s] 91%|█████████ | 273/300 [00:22<00:02, 10.83it/s] 93%|█████████▎| 280/300 [00:22<00:01, 15.67it/s] 95%|█████████▍| 284/300 [00:22<00:01, 12.17it/s] 96%|█████████▋| 289/300 [00:23<00:01, 10.83it/s] 99%|█████████▊| 296/300 [00:23<00:00, 15.66it/s]100%|██████████| 300/300 [00:24<00:00, 12.16it/s]100%|██████████| 300/300 [00:24<00:00, 12.46it/s]
-[rollout 5/40] time_s=25.13 mode=baseline video_made=True stats: {'Return': 0.0, 'Horizon': 300, 'Success_Rate': 0.0, 'Rzz_List': 300, 'Pos_List': 300, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:10,  1.57it/s]  3%|▎         | 9/300 [00:01<00:35,  8.12it/s]  6%|▌         | 17/300 [00:01<00:27, 10.31it/s]  8%|▊         | 25/300 [00:02<00:24, 11.36it/s] 11%|█         | 33/300 [00:03<00:22, 11.91it/s] 14%|█▎        | 41/300 [00:03<00:21, 12.22it/s] 16%|█▌        | 48/300 [00:03<00:15, 16.38it/s] 17%|█▋        | 52/300 [00:04<00:19, 12.93it/s] 19%|█▉        | 57/300 [00:04<00:21, 11.40it/s] 21%|██▏       | 64/300 [00:05<00:14, 16.00it/s] 23%|██▎       | 68/300 [00:05<00:18, 12.50it/s] 24%|██▍       | 73/300 [00:06<00:20, 11.07it/s] 27%|██▋       | 80/300 [00:06<00:13, 15.86it/s] 28%|██▊       | 84/300 [00:06<00:17, 12.33it/s] 30%|██▉       | 89/300 [00:07<00:19, 10.91it/s] 32%|███▏      | 96/300 [00:07<00:13, 15.65it/s] 33%|███▎      | 100/300 [00:08<00:16, 12.19it/s] 35%|███▌      | 105/300 [00:08<00:18, 10.82it/s] 37%|███▋      | 112/300 [00:08<00:12, 15.61it/s] 39%|███▊      | 116/300 [00:09<00:15, 12.15it/s] 40%|████      | 121/300 [00:10<00:16, 10.78it/s] 43%|████▎     | 128/300 [00:10<00:11, 15.48it/s] 44%|████▍     | 132/300 [00:10<00:13, 12.08it/s] 46%|████▌     | 137/300 [00:11<00:15, 10.76it/s] 48%|████▊     | 144/300 [00:11<00:10, 15.45it/s] 49%|████▉     | 148/300 [00:12<00:12, 12.06it/s] 51%|█████     | 153/300 [00:12<00:13, 10.73it/s] 53%|█████▎    | 160/300 [00:12<00:09, 15.42it/s] 55%|█████▍    | 164/300 [00:13<00:11, 12.01it/s] 56%|█████▋    | 169/300 [00:13<00:12, 10.70it/s] 58%|█████▊    | 174/300 [00:13<00:10, 12.45it/s]
-[rollout 6/40] time_s=15.02 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 175, 'Success_Rate': 1.0, 'Rzz_List': 175, 'Pos_List': 175, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:13,  1.55it/s]  3%|▎         | 8/300 [00:00<00:21, 13.63it/s]  4%|▍         | 12/300 [00:01<00:29,  9.80it/s]  6%|▌         | 17/300 [00:01<00:30,  9.28it/s]  8%|▊         | 25/300 [00:02<00:25, 10.80it/s] 11%|█         | 33/300 [00:03<00:23, 11.59it/s] 13%|█▎        | 40/300 [00:03<00:16, 16.22it/s] 15%|█▍        | 44/300 [00:03<00:20, 12.66it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.16it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.90it/s] 20%|██        | 60/300 [00:05<00:19, 12.40it/s] 22%|██▏       | 65/300 [00:05<00:21, 11.00it/s] 24%|██▎       | 71/300 [00:05<00:15, 15.06it/s] 25%|██▌       | 75/300 [00:06<00:19, 11.76it/s] 27%|██▋       | 81/300 [00:06<00:19, 11.02it/s] 29%|██▉       | 87/300 [00:07<00:14, 14.97it/s] 30%|███       | 91/300 [00:07<00:17, 11.76it/s] 32%|███▏      | 97/300 [00:08<00:18, 11.07it/s] 35%|███▍      | 104/300 [00:08<00:12, 15.71it/s] 36%|███▌      | 108/300 [00:08<00:15, 12.24it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.85it/s] 40%|████      | 120/300 [00:09<00:11, 15.52it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.14it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.18it/s]
-[rollout 7/40] time_s=11.22 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 125, 'Success_Rate': 1.0, 'Rzz_List': 125, 'Pos_List': 125, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:11,  1.56it/s]  3%|▎         | 9/300 [00:01<00:35,  8.14it/s]  6%|▌         | 17/300 [00:01<00:27, 10.35it/s]  8%|▊         | 25/300 [00:02<00:24, 11.40it/s] 11%|█         | 33/300 [00:03<00:22, 11.97it/s] 13%|█▎        | 40/300 [00:03<00:15, 16.44it/s] 15%|█▍        | 44/300 [00:03<00:19, 12.84it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.32it/s] 19%|█▊        | 56/300 [00:04<00:15, 16.03it/s] 20%|██        | 60/300 [00:05<00:19, 12.47it/s] 22%|██▏       | 65/300 [00:05<00:21, 11.02it/s] 24%|██▎       | 71/300 [00:05<00:15, 15.06it/s] 25%|██▌       | 75/300 [00:06<00:19, 11.79it/s] 27%|██▋       | 81/300 [00:06<00:19, 11.08it/s] 29%|██▉       | 88/300 [00:07<00:13, 15.70it/s] 31%|███       | 92/300 [00:07<00:16, 12.25it/s] 32%|███▏      | 97/300 [00:08<00:18, 10.88it/s] 35%|███▍      | 104/300 [00:08<00:12, 15.55it/s] 36%|███▌      | 108/300 [00:08<00:15, 12.14it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.79it/s] 38%|███▊      | 115/300 [00:09<00:15, 12.13it/s]
-[rollout 8/40] time_s=10.53 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 116, 'Success_Rate': 1.0, 'Rzz_List': 116, 'Pos_List': 116, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:11,  1.56it/s]  3%|▎         | 9/300 [00:01<00:35,  8.11it/s]  6%|▌         | 17/300 [00:01<00:27, 10.28it/s]  8%|▊         | 25/300 [00:02<00:24, 11.34it/s] 11%|█         | 33/300 [00:03<00:22, 11.92it/s] 14%|█▎        | 41/300 [00:03<00:21, 12.23it/s] 16%|█▌        | 48/300 [00:03<00:15, 16.37it/s] 17%|█▋        | 52/300 [00:04<00:19, 12.92it/s] 19%|█▉        | 57/300 [00:04<00:21, 11.38it/s] 21%|██▏       | 64/300 [00:05<00:14, 15.94it/s] 23%|██▎       | 68/300 [00:05<00:18, 12.41it/s] 24%|██▍       | 73/300 [00:06<00:20, 10.95it/s] 27%|██▋       | 80/300 [00:06<00:14, 15.57it/s] 28%|██▊       | 84/300 [00:06<00:17, 12.14it/s] 30%|██▉       | 89/300 [00:07<00:19, 10.79it/s] 32%|███▏      | 96/300 [00:07<00:13, 15.44it/s] 33%|███▎      | 100/300 [00:08<00:16, 12.08it/s] 35%|███▌      | 105/300 [00:08<00:18, 10.76it/s] 37%|███▋      | 112/300 [00:08<00:12, 15.46it/s] 39%|███▊      | 116/300 [00:09<00:15, 12.09it/s] 40%|████      | 121/300 [00:10<00:16, 10.78it/s] 42%|████▏     | 125/300 [00:10<00:14, 12.29it/s]
-[rollout 9/40] time_s=11.24 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 126, 'Success_Rate': 1.0, 'Rzz_List': 126, 'Pos_List': 126, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:12,  1.56it/s]  3%|▎         | 9/300 [00:01<00:35,  8.12it/s]  6%|▌         | 17/300 [00:01<00:27, 10.32it/s]  8%|▊         | 25/300 [00:02<00:24, 11.34it/s] 11%|█         | 33/300 [00:03<00:22, 11.91it/s] 14%|█▎        | 41/300 [00:03<00:21, 12.25it/s] 16%|█▌        | 48/300 [00:03<00:15, 16.42it/s] 17%|█▋        | 52/300 [00:04<00:19, 12.96it/s] 19%|█▉        | 57/300 [00:04<00:21, 11.42it/s] 21%|██▏       | 64/300 [00:05<00:14, 16.04it/s] 23%|██▎       | 68/300 [00:05<00:18, 12.53it/s] 24%|██▍       | 73/300 [00:06<00:20, 11.09it/s] 27%|██▋       | 80/300 [00:06<00:13, 15.88it/s] 28%|██▊       | 84/300 [00:06<00:17, 12.33it/s] 30%|██▉       | 89/300 [00:07<00:19, 10.93it/s] 32%|███▏      | 96/300 [00:07<00:12, 15.72it/s] 33%|███▎      | 100/300 [00:08<00:16, 12.18it/s] 35%|███▌      | 105/300 [00:08<00:18, 10.80it/s] 37%|███▋      | 112/300 [00:08<00:12, 15.50it/s] 39%|███▊      | 116/300 [00:09<00:15, 12.12it/s] 40%|████      | 121/300 [00:10<00:16, 10.75it/s] 43%|████▎     | 128/300 [00:10<00:11, 15.48it/s] 44%|████▍     | 132/300 [00:10<00:13, 12.12it/s] 46%|████▌     | 137/300 [00:11<00:15, 10.80it/s] 48%|████▊     | 144/300 [00:11<00:09, 15.66it/s] 49%|████▉     | 148/300 [00:11<00:12, 12.18it/s] 51%|█████     | 153/300 [00:12<00:13, 10.84it/s] 53%|█████▎    | 160/300 [00:12<00:08, 15.60it/s] 55%|█████▍    | 164/300 [00:13<00:11, 12.11it/s] 56%|█████▋    | 169/300 [00:13<00:12, 10.78it/s] 59%|█████▊    | 176/300 [00:13<00:07, 15.53it/s] 60%|██████    | 180/300 [00:14<00:09, 12.11it/s] 62%|██████▏   | 185/300 [00:15<00:10, 10.79it/s] 64%|██████▍   | 192/300 [00:15<00:06, 15.53it/s] 65%|██████▌   | 196/300 [00:15<00:08, 12.10it/s] 67%|██████▋   | 201/300 [00:16<00:09, 10.76it/s] 69%|██████▉   | 208/300 [00:16<00:05, 15.52it/s] 71%|███████   | 212/300 [00:17<00:07, 12.11it/s] 72%|███████▏  | 217/300 [00:17<00:07, 10.75it/s] 75%|███████▍  | 224/300 [00:17<00:04, 15.49it/s] 76%|███████▌  | 228/300 [00:18<00:05, 12.08it/s] 78%|███████▊  | 233/300 [00:18<00:06, 10.76it/s] 80%|████████  | 240/300 [00:19<00:03, 15.50it/s] 81%|████████▏ | 244/300 [00:19<00:04, 12.09it/s] 83%|████████▎ | 249/300 [00:20<00:04, 10.77it/s] 85%|████████▌ | 256/300 [00:20<00:02, 15.52it/s] 87%|████████▋ | 260/300 [00:20<00:03, 12.08it/s] 88%|████████▊ | 265/300 [00:21<00:03, 10.75it/s] 91%|█████████ | 272/300 [00:21<00:01, 15.48it/s] 92%|█████████▏| 276/300 [00:22<00:01, 12.08it/s] 94%|█████████▎| 281/300 [00:22<00:01, 10.74it/s] 96%|█████████▌| 288/300 [00:22<00:00, 15.45it/s] 97%|█████████▋| 292/300 [00:23<00:00, 12.04it/s] 99%|█████████▉| 297/300 [00:24<00:00, 10.73it/s]100%|██████████| 300/300 [00:24<00:00, 12.46it/s]
-[rollout 10/40] time_s=25.18 mode=baseline video_made=True stats: {'Return': 0.0, 'Horizon': 300, 'Success_Rate': 0.0, 'Rzz_List': 300, 'Pos_List': 300, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:10,  1.57it/s]  3%|▎         | 8/300 [00:00<00:20, 14.10it/s]  4%|▍         | 13/300 [00:01<00:26, 10.85it/s]  6%|▌         | 17/300 [00:01<00:30,  9.16it/s]  8%|▊         | 25/300 [00:02<00:25, 10.75it/s] 11%|█         | 33/300 [00:03<00:23, 11.57it/s] 13%|█▎        | 40/300 [00:03<00:16, 16.22it/s] 15%|█▍        | 44/300 [00:03<00:20, 12.64it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.18it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.95it/s] 20%|██        | 60/300 [00:05<00:19, 12.41it/s] 22%|██▏       | 65/300 [00:05<00:21, 10.98it/s] 24%|██▎       | 71/300 [00:05<00:15, 15.03it/s] 25%|██▌       | 75/300 [00:06<00:19, 11.80it/s] 27%|██▋       | 81/300 [00:06<00:19, 11.10it/s] 29%|██▉       | 88/300 [00:06<00:13, 15.76it/s] 31%|███       | 92/300 [00:07<00:16, 12.30it/s] 32%|███▏      | 97/300 [00:08<00:18, 10.93it/s] 35%|███▍      | 104/300 [00:08<00:12, 15.68it/s] 36%|███▌      | 108/300 [00:08<00:15, 12.21it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.84it/s] 40%|████      | 120/300 [00:09<00:11, 15.54it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.11it/s] 43%|████▎     | 129/300 [00:10<00:15, 10.81it/s] 43%|████▎     | 129/300 [00:10<00:14, 12.06it/s]
-[rollout 11/40] time_s=11.82 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 130, 'Success_Rate': 1.0, 'Rzz_List': 130, 'Pos_List': 130, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:15,  1.53it/s]  3%|▎         | 9/300 [00:01<00:35,  8.10it/s]  6%|▌         | 17/300 [00:01<00:27, 10.33it/s]  8%|▊         | 25/300 [00:02<00:24, 11.43it/s] 11%|█         | 33/300 [00:03<00:22, 11.93it/s] 13%|█▎        | 40/300 [00:03<00:15, 16.36it/s] 15%|█▍        | 44/300 [00:03<00:20, 12.75it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.25it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.94it/s] 20%|██        | 60/300 [00:05<00:19, 12.40it/s] 22%|██▏       | 65/300 [00:05<00:21, 10.98it/s] 24%|██▍       | 72/300 [00:05<00:14, 15.79it/s] 25%|██▌       | 76/300 [00:06<00:18, 12.27it/s] 27%|██▋       | 81/300 [00:06<00:20, 10.89it/s] 29%|██▉       | 88/300 [00:07<00:13, 15.65it/s] 31%|███       | 92/300 [00:07<00:17, 12.16it/s] 32%|███▏      | 97/300 [00:08<00:18, 10.80it/s] 35%|███▍      | 104/300 [00:08<00:12, 15.51it/s] 36%|███▌      | 108/300 [00:08<00:15, 12.11it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.75it/s] 40%|████      | 120/300 [00:09<00:11, 15.44it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.04it/s] 43%|████▎     | 129/300 [00:10<00:16, 10.69it/s] 45%|████▌     | 136/300 [00:10<00:10, 15.46it/s] 47%|████▋     | 140/300 [00:11<00:13, 12.11it/s] 48%|████▊     | 145/300 [00:11<00:14, 10.81it/s] 51%|█████     | 152/300 [00:12<00:09, 15.66it/s] 52%|█████▏    | 156/300 [00:12<00:11, 12.20it/s] 54%|█████▎    | 161/300 [00:13<00:12, 10.85it/s] 56%|█████▌    | 168/300 [00:13<00:08, 15.69it/s] 57%|█████▋    | 172/300 [00:13<00:10, 12.21it/s] 59%|█████▉    | 177/300 [00:14<00:11, 10.86it/s] 61%|██████▏   | 184/300 [00:14<00:07, 15.70it/s] 63%|██████▎   | 188/300 [00:15<00:09, 12.21it/s] 64%|██████▍   | 193/300 [00:15<00:09, 10.85it/s] 67%|██████▋   | 200/300 [00:15<00:06, 15.70it/s] 68%|██████▊   | 204/300 [00:16<00:07, 12.22it/s] 70%|██████▉   | 209/300 [00:17<00:08, 10.86it/s] 72%|███████▏  | 216/300 [00:17<00:05, 15.72it/s] 73%|███████▎  | 220/300 [00:17<00:06, 12.21it/s] 75%|███████▌  | 225/300 [00:18<00:06, 10.85it/s] 77%|███████▋  | 232/300 [00:18<00:04, 15.70it/s] 79%|███████▊  | 236/300 [00:18<00:05, 12.21it/s] 80%|████████  | 241/300 [00:19<00:05, 10.84it/s] 83%|████████▎ | 248/300 [00:19<00:03, 15.68it/s] 84%|████████▍ | 252/300 [00:20<00:03, 12.19it/s] 86%|████████▌ | 257/300 [00:20<00:03, 10.83it/s] 88%|████████▊ | 264/300 [00:20<00:02, 15.66it/s] 89%|████████▉ | 268/300 [00:21<00:02, 12.17it/s] 91%|█████████ | 273/300 [00:22<00:02, 10.81it/s] 93%|█████████▎| 280/300 [00:22<00:01, 15.63it/s] 95%|█████████▍| 284/300 [00:22<00:01, 12.15it/s] 96%|█████████▋| 289/300 [00:23<00:01, 10.81it/s] 99%|█████████▊| 296/300 [00:23<00:00, 15.62it/s]100%|██████████| 300/300 [00:24<00:00, 12.15it/s]100%|██████████| 300/300 [00:24<00:00, 12.49it/s]
-[rollout 12/40] time_s=25.10 mode=baseline video_made=True stats: {'Return': 0.0, 'Horizon': 300, 'Success_Rate': 0.0, 'Rzz_List': 300, 'Pos_List': 300, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:13,  1.54it/s]  3%|▎         | 9/300 [00:01<00:36,  8.05it/s]  6%|▌         | 17/300 [00:01<00:27, 10.26it/s]  8%|▊         | 25/300 [00:02<00:24, 11.34it/s] 11%|█         | 33/300 [00:03<00:22, 11.91it/s] 14%|█▎        | 41/300 [00:03<00:21, 12.25it/s] 16%|█▌        | 48/300 [00:03<00:15, 16.36it/s] 17%|█▋        | 51/300 [00:04<00:20, 12.38it/s] 19%|█▉        | 57/300 [00:05<00:21, 11.51it/s] 21%|██▏       | 64/300 [00:05<00:14, 15.96it/s] 23%|██▎       | 68/300 [00:05<00:18, 12.42it/s] 24%|██▍       | 73/300 [00:06<00:20, 10.96it/s] 26%|██▋       | 79/300 [00:06<00:14, 14.90it/s] 28%|██▊       | 83/300 [00:06<00:18, 11.72it/s] 30%|██▉       | 89/300 [00:07<00:19, 11.00it/s] 32%|███▏      | 96/300 [00:07<00:13, 15.58it/s] 33%|███▎      | 100/300 [00:08<00:16, 12.14it/s] 35%|███▌      | 105/300 [00:08<00:18, 10.76it/s] 37%|███▋      | 111/300 [00:08<00:12, 14.74it/s] 38%|███▊      | 115/300 [00:09<00:15, 11.60it/s] 40%|████      | 121/300 [00:10<00:16, 10.91it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.13it/s]
-[rollout 13/40] time_s=11.30 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 125, 'Success_Rate': 1.0, 'Rzz_List': 125, 'Pos_List': 125, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:12,  1.55it/s]  3%|▎         | 9/300 [00:01<00:35,  8.09it/s]  6%|▌         | 17/300 [00:01<00:27, 10.29it/s]  8%|▊         | 25/300 [00:02<00:24, 11.33it/s] 11%|█         | 33/300 [00:03<00:22, 11.91it/s] 14%|█▎        | 41/300 [00:03<00:21, 12.23it/s] 16%|█▌        | 48/300 [00:03<00:15, 16.38it/s] 17%|█▋        | 52/300 [00:04<00:19, 12.93it/s] 19%|█▉        | 57/300 [00:04<00:21, 11.40it/s] 21%|██▏       | 64/300 [00:05<00:14, 15.97it/s] 23%|██▎       | 68/300 [00:05<00:18, 12.42it/s] 24%|██▍       | 73/300 [00:06<00:20, 10.94it/s] 26%|██▋       | 79/300 [00:06<00:14, 14.90it/s] 28%|██▊       | 83/300 [00:06<00:18, 11.72it/s] 30%|██▉       | 89/300 [00:07<00:19, 11.02it/s] 32%|███▏      | 96/300 [00:07<00:13, 15.66it/s] 33%|███▎      | 100/300 [00:08<00:16, 12.20it/s] 35%|███▌      | 105/300 [00:08<00:18, 10.83it/s] 37%|███▋      | 112/300 [00:08<00:12, 15.51it/s] 39%|███▊      | 116/300 [00:09<00:15, 12.09it/s] 40%|████      | 121/300 [00:10<00:16, 10.76it/s] 43%|████▎     | 128/300 [00:10<00:11, 15.50it/s] 43%|████▎     | 129/300 [00:10<00:14, 11.99it/s]
-[rollout 14/40] time_s=11.81 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 130, 'Success_Rate': 1.0, 'Rzz_List': 130, 'Pos_List': 130, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:10,  1.57it/s]  2%|▏         | 6/300 [00:00<00:28, 10.41it/s]  3%|▎         | 9/300 [00:01<00:38,  7.52it/s]  6%|▌         | 17/300 [00:01<00:27, 10.22it/s]  8%|▊         | 25/300 [00:02<00:24, 11.33it/s] 11%|█         | 33/300 [00:03<00:22, 11.95it/s] 14%|█▎        | 41/300 [00:03<00:21, 12.29it/s] 16%|█▌        | 48/300 [00:03<00:15, 16.53it/s] 17%|█▋        | 52/300 [00:04<00:19, 12.99it/s] 19%|█▉        | 57/300 [00:04<00:21, 11.46it/s] 21%|██▏       | 64/300 [00:05<00:14, 16.07it/s] 23%|██▎       | 68/300 [00:05<00:18, 12.49it/s] 24%|██▍       | 73/300 [00:06<00:20, 11.03it/s] 26%|██▋       | 79/300 [00:06<00:14, 15.03it/s] 28%|██▊       | 83/300 [00:06<00:18, 11.82it/s] 30%|██▉       | 89/300 [00:07<00:18, 11.12it/s] 32%|███▏      | 96/300 [00:07<00:12, 15.77it/s] 33%|███▎      | 100/300 [00:08<00:16, 12.26it/s] 35%|███▌      | 105/300 [00:08<00:17, 10.85it/s] 37%|███▋      | 112/300 [00:08<00:12, 15.53it/s] 39%|███▊      | 116/300 [00:09<00:15, 12.13it/s] 40%|████      | 121/300 [00:10<00:16, 10.79it/s] 42%|████▏     | 126/300 [00:10<00:14, 12.38it/s]
-[rollout 15/40] time_s=11.22 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 127, 'Success_Rate': 1.0, 'Rzz_List': 127, 'Pos_List': 127, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:12,  1.55it/s]  3%|▎         | 9/300 [00:01<00:35,  8.11it/s]  6%|▌         | 17/300 [00:01<00:27, 10.32it/s]  8%|▊         | 25/300 [00:02<00:24, 11.36it/s] 11%|█         | 33/300 [00:03<00:22, 11.91it/s] 14%|█▎        | 41/300 [00:03<00:21, 12.23it/s] 16%|█▌        | 48/300 [00:03<00:15, 16.37it/s] 17%|█▋        | 52/300 [00:04<00:19, 12.92it/s] 19%|█▉        | 57/300 [00:04<00:21, 11.39it/s] 21%|██▏       | 64/300 [00:05<00:14, 15.94it/s] 23%|██▎       | 68/300 [00:05<00:18, 12.45it/s] 24%|██▍       | 73/300 [00:06<00:20, 11.01it/s] 27%|██▋       | 80/300 [00:06<00:14, 15.63it/s] 28%|██▊       | 84/300 [00:06<00:17, 12.19it/s] 30%|██▉       | 89/300 [00:07<00:19, 10.83it/s] 32%|███▏      | 96/300 [00:07<00:13, 15.51it/s] 33%|███▎      | 100/300 [00:08<00:16, 12.11it/s] 35%|███▌      | 105/300 [00:08<00:18, 10.80it/s] 37%|███▋      | 112/300 [00:08<00:12, 15.57it/s] 39%|███▊      | 116/300 [00:09<00:15, 12.14it/s] 40%|████      | 121/300 [00:10<00:16, 10.81it/s] 42%|████▏     | 127/300 [00:10<00:13, 12.47it/s]
-[rollout 16/40] time_s=11.24 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 128, 'Success_Rate': 1.0, 'Rzz_List': 128, 'Pos_List': 128, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:15,  1.53it/s]  3%|▎         | 9/300 [00:01<00:36,  8.05it/s]  6%|▌         | 17/300 [00:01<00:27, 10.29it/s]  8%|▊         | 25/300 [00:02<00:24, 11.36it/s] 11%|█         | 33/300 [00:03<00:22, 11.93it/s] 13%|█▎        | 40/300 [00:03<00:15, 16.38it/s] 15%|█▍        | 44/300 [00:03<00:19, 12.83it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.31it/s] 19%|█▊        | 56/300 [00:04<00:15, 16.03it/s] 20%|██        | 60/300 [00:05<00:19, 12.45it/s] 22%|██▏       | 65/300 [00:05<00:21, 10.97it/s] 24%|██▍       | 72/300 [00:05<00:14, 15.62it/s] 25%|██▌       | 76/300 [00:06<00:18, 12.16it/s] 27%|██▋       | 81/300 [00:06<00:20, 10.81it/s] 29%|██▉       | 88/300 [00:07<00:13, 15.49it/s] 31%|███       | 92/300 [00:07<00:17, 12.09it/s] 32%|███▏      | 97/300 [00:08<00:18, 10.75it/s] 35%|███▍      | 104/300 [00:08<00:12, 15.44it/s] 36%|███▌      | 108/300 [00:08<00:15, 12.04it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.71it/s] 40%|████      | 120/300 [00:09<00:11, 15.46it/s] 40%|████      | 120/300 [00:10<00:15, 11.88it/s]
-[rollout 17/40] time_s=11.17 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 121, 'Success_Rate': 1.0, 'Rzz_List': 121, 'Pos_List': 121, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:10,  1.57it/s]  3%|▎         | 9/300 [00:01<00:35,  8.15it/s]  6%|▌         | 17/300 [00:01<00:27, 10.31it/s]  8%|▊         | 25/300 [00:02<00:24, 11.31it/s] 11%|█         | 33/300 [00:03<00:22, 11.89it/s] 13%|█▎        | 40/300 [00:03<00:15, 16.33it/s] 15%|█▍        | 44/300 [00:03<00:20, 12.76it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.25it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.94it/s] 20%|██        | 60/300 [00:05<00:19, 12.13it/s] 22%|██▏       | 65/300 [00:05<00:21, 10.79it/s] 24%|██▎       | 71/300 [00:05<00:15, 14.72it/s] 25%|██▌       | 75/300 [00:06<00:19, 11.56it/s] 27%|██▋       | 81/300 [00:06<00:20, 10.88it/s] 29%|██▉       | 87/300 [00:07<00:14, 14.80it/s] 30%|███       | 91/300 [00:07<00:17, 11.66it/s] 32%|███▏      | 97/300 [00:08<00:18, 10.98it/s] 34%|███▍      | 103/300 [00:08<00:13, 14.93it/s] 36%|███▌      | 107/300 [00:08<00:16, 11.77it/s] 38%|███▊      | 113/300 [00:09<00:16, 11.07it/s] 40%|████      | 120/300 [00:09<00:11, 15.72it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.23it/s] 43%|████▎     | 128/300 [00:10<00:14, 11.83it/s]
-[rollout 18/40] time_s=11.91 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 129, 'Success_Rate': 1.0, 'Rzz_List': 129, 'Pos_List': 129, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:13,  1.54it/s]  3%|▎         | 9/300 [00:01<00:35,  8.09it/s]  6%|▌         | 17/300 [00:01<00:27, 10.32it/s]  8%|▊         | 25/300 [00:02<00:24, 11.39it/s] 11%|█         | 33/300 [00:03<00:22, 11.97it/s] 14%|█▎        | 41/300 [00:03<00:21, 12.26it/s] 16%|█▌        | 48/300 [00:03<00:15, 16.39it/s] 17%|█▋        | 51/300 [00:04<00:20, 12.40it/s] 19%|█▉        | 57/300 [00:04<00:21, 11.55it/s] 21%|██▏       | 64/300 [00:05<00:14, 16.10it/s] 23%|██▎       | 68/300 [00:05<00:18, 12.52it/s] 24%|██▍       | 73/300 [00:06<00:20, 11.04it/s] 27%|██▋       | 80/300 [00:06<00:14, 15.64it/s] 28%|██▊       | 84/300 [00:06<00:17, 12.21it/s] 30%|██▉       | 89/300 [00:07<00:19, 10.83it/s] 32%|███▏      | 96/300 [00:07<00:13, 15.52it/s] 33%|███▎      | 100/300 [00:08<00:16, 12.08it/s] 35%|███▌      | 105/300 [00:08<00:18, 10.72it/s] 37%|███▋      | 112/300 [00:08<00:12, 15.41it/s] 39%|███▊      | 116/300 [00:09<00:15, 12.02it/s] 40%|████      | 121/300 [00:10<00:16, 10.71it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.20it/s]
-[rollout 19/40] time_s=11.29 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 125, 'Success_Rate': 1.0, 'Rzz_List': 125, 'Pos_List': 125, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]  0%|          | 1/300 [00:00<03:14,  1.54it/s]  2%|▏         | 7/300 [00:00<00:24, 11.94it/s]  4%|▎         | 11/300 [00:01<00:31,  9.05it/s]  6%|▌         | 17/300 [00:01<00:29,  9.56it/s]  8%|▊         | 25/300 [00:02<00:25, 10.96it/s] 11%|█         | 33/300 [00:03<00:22, 11.71it/s] 13%|█▎        | 40/300 [00:03<00:15, 16.29it/s] 15%|█▍        | 44/300 [00:03<00:20, 12.71it/s] 16%|█▋        | 49/300 [00:04<00:22, 11.19it/s] 19%|█▊        | 56/300 [00:04<00:15, 15.94it/s] 20%|██        | 60/300 [00:05<00:19, 12.40it/s] 22%|██▏       | 65/300 [00:05<00:21, 10.99it/s] 24%|██▎       | 71/300 [00:05<00:15, 15.05it/s] 25%|██▌       | 75/300 [00:06<00:19, 11.78it/s] 27%|██▋       | 81/300 [00:06<00:19, 11.04it/s] 29%|██▉       | 88/300 [00:07<00:13, 15.69it/s] 31%|███       | 92/300 [00:07<00:16, 12.24it/s] 32%|███▏      | 97/300 [00:08<00:18, 10.87it/s] 35%|███▍      | 104/300 [00:08<00:12, 15.60it/s] 36%|███▌      | 108/300 [00:08<00:15, 12.20it/s] 38%|███▊      | 113/300 [00:09<00:17, 10.85it/s] 40%|████      | 120/300 [00:09<00:11, 15.57it/s] 41%|████▏     | 124/300 [00:10<00:14, 12.13it/s] 43%|████▎     | 128/300 [00:10<00:14, 11.92it/s]
-[rollout 20/40] time_s=11.87 mode=baseline video_made=True stats: {'Return': 1.0, 'Horizon': 129, 'Success_Rate': 1.0, 'Rzz_List': 129, 'Pos_List': 129, 'Mode': 'baseline'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0770 (num_samples=8)
-run_rejection_sampling_time_s=3.5103
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<38:31,  7.73s/it]  2%|▏         | 7/300 [00:07<04:01,  1.21it/s]sample_actions_time_s=4.1046 (num_samples=8)
-run_rejection_sampling_time_s=3.5590
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▎         | 11/300 [00:15<06:25,  1.33s/it]sample_actions_time_s=4.1190 (num_samples=8)
-run_rejection_sampling_time_s=3.5425
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:11,  1.31s/it]sample_actions_time_s=4.1234 (num_samples=8)
-run_rejection_sampling_time_s=3.5466
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:15,  1.15s/it] 11%|█         | 32/300 [00:31<03:12,  1.39it/s]sample_actions_time_s=4.1231 (num_samples=8)
-run_rejection_sampling_time_s=3.6264
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 12%|█▏        | 35/300 [00:38<04:44,  1.07s/it]sample_actions_time_s=4.1293 (num_samples=8)
-run_rejection_sampling_time_s=3.6427
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▎        | 41/300 [00:46<04:59,  1.16s/it] 16%|█▌        | 48/300 [00:46<03:05,  1.36it/s]sample_actions_time_s=4.0981 (num_samples=8)
-run_rejection_sampling_time_s=3.6567
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 17%|█▋        | 51/300 [00:54<04:28,  1.08s/it]sample_actions_time_s=4.0910 (num_samples=8)
-run_rejection_sampling_time_s=3.6974
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 19%|█▉        | 57/300 [01:02<04:41,  1.16s/it] 21%|██▏       | 64/300 [01:02<02:55,  1.35it/s]sample_actions_time_s=4.1477 (num_samples=8)
-run_rejection_sampling_time_s=3.7235
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 67/300 [01:10<04:13,  1.09s/it]sample_actions_time_s=4.1148 (num_samples=8)
-run_rejection_sampling_time_s=3.8607
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 24%|██▍       | 73/300 [01:18<04:27,  1.18s/it] 26%|██▋       | 79/300 [01:18<02:55,  1.26it/s]sample_actions_time_s=4.0915 (num_samples=8)
-run_rejection_sampling_time_s=3.8135
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 82/300 [01:26<04:10,  1.15s/it] 29%|██▉       | 88/300 [01:26<02:39,  1.33it/s]sample_actions_time_s=4.0760 (num_samples=8)
-run_rejection_sampling_time_s=3.8105
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 31%|███       | 92/300 [01:34<03:40,  1.06s/it]sample_actions_time_s=4.0748 (num_samples=8)
-run_rejection_sampling_time_s=3.8221
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:42<04:09,  1.23s/it] 34%|███▍      | 103/300 [01:42<02:39,  1.24it/s]sample_actions_time_s=4.0792 (num_samples=8)
-run_rejection_sampling_time_s=3.9002
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 106/300 [01:50<03:48,  1.18s/it]sample_actions_time_s=4.0883 (num_samples=8)
-run_rejection_sampling_time_s=3.9230
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [01:59<03:39,  1.17s/it] 40%|████      | 120/300 [01:59<02:15,  1.33it/s]sample_actions_time_s=4.1068 (num_samples=8)
-run_rejection_sampling_time_s=3.7639
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 123/300 [02:07<03:13,  1.10s/it] 42%|████▏     | 126/300 [02:07<02:55,  1.01s/it]
-[rollout 21/40] time_s=128.35 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 127, 'Success_Rate': 1.0, 'Rzz_List': 127, 'Pos_List': 127, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0974 (num_samples=8)
-run_rejection_sampling_time_s=3.6127
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:10,  7.86s/it]  3%|▎         | 8/300 [00:07<03:32,  1.37it/s]sample_actions_time_s=4.1091 (num_samples=8)
-run_rejection_sampling_time_s=3.6155
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:23,  1.13s/it]sample_actions_time_s=4.1051 (num_samples=8)
-run_rejection_sampling_time_s=3.5763
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:40,  1.41s/it]sample_actions_time_s=4.1116 (num_samples=8)
-run_rejection_sampling_time_s=3.6306
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:29,  1.20s/it]sample_actions_time_s=4.1301 (num_samples=8)
-run_rejection_sampling_time_s=3.6424
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:56,  1.11s/it] 13%|█▎        | 40/300 [00:39<03:10,  1.36it/s]sample_actions_time_s=4.0983 (num_samples=8)
-run_rejection_sampling_time_s=3.6611
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:47<04:31,  1.06s/it]sample_actions_time_s=4.1211 (num_samples=8)
-run_rejection_sampling_time_s=3.7053
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<04:47,  1.14s/it] 19%|█▊        | 56/300 [00:55<03:01,  1.35it/s]sample_actions_time_s=4.1324 (num_samples=8)
-run_rejection_sampling_time_s=3.7450
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:03<04:20,  1.08s/it]sample_actions_time_s=4.1340 (num_samples=8)
-run_rejection_sampling_time_s=3.9380
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:11<04:36,  1.18s/it] 24%|██▎       | 71/300 [01:11<03:03,  1.25it/s]sample_actions_time_s=4.1175 (num_samples=8)
-run_rejection_sampling_time_s=4.0538
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▍       | 74/300 [01:19<04:23,  1.17s/it] 27%|██▋       | 80/300 [01:19<02:48,  1.31it/s]sample_actions_time_s=4.0912 (num_samples=8)
-run_rejection_sampling_time_s=4.1029
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 28%|██▊       | 83/300 [01:27<04:12,  1.16s/it]sample_actions_time_s=4.0761 (num_samples=8)
-run_rejection_sampling_time_s=4.0457
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|██▉       | 89/300 [01:36<04:21,  1.24s/it] 32%|███▏      | 95/300 [01:36<02:48,  1.22it/s]sample_actions_time_s=4.0965 (num_samples=8)
-run_rejection_sampling_time_s=4.0131
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 33%|███▎      | 98/300 [01:44<04:01,  1.19s/it] 35%|███▍      | 104/300 [01:44<02:31,  1.30it/s]sample_actions_time_s=4.0792 (num_samples=8)
-run_rejection_sampling_time_s=4.0810
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 107/300 [01:52<03:46,  1.17s/it]sample_actions_time_s=4.1267 (num_samples=8)
-run_rejection_sampling_time_s=3.9273
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [02:00<03:52,  1.24s/it] 40%|███▉      | 119/300 [02:01<02:28,  1.22it/s]sample_actions_time_s=4.0904 (num_samples=8)
-run_rejection_sampling_time_s=3.7254
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 122/300 [02:08<03:29,  1.18s/it] 42%|████▏     | 125/300 [02:09<03:00,  1.03s/it]
-[rollout 22/40] time_s=130.10 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 126, 'Success_Rate': 1.0, 'Rzz_List': 126, 'Pos_List': 126, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.1144 (num_samples=8)
-run_rejection_sampling_time_s=3.5310
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<38:48,  7.79s/it]  3%|▎         | 8/300 [00:07<03:30,  1.39it/s]sample_actions_time_s=4.0846 (num_samples=8)
-run_rejection_sampling_time_s=3.5848
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 12/300 [00:15<05:56,  1.24s/it]sample_actions_time_s=4.0753 (num_samples=8)
-run_rejection_sampling_time_s=3.5434
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:26,  1.37s/it]sample_actions_time_s=4.0850 (num_samples=8)
-run_rejection_sampling_time_s=3.5599
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:21,  1.17s/it]sample_actions_time_s=4.0923 (num_samples=8)
-run_rejection_sampling_time_s=3.6464
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:38<04:51,  1.09s/it] 13%|█▎        | 40/300 [00:39<03:08,  1.38it/s]sample_actions_time_s=4.1409 (num_samples=8)
-run_rejection_sampling_time_s=3.6848
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:46<04:30,  1.05s/it]sample_actions_time_s=4.1507 (num_samples=8)
-run_rejection_sampling_time_s=3.7482
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:54<04:47,  1.15s/it] 19%|█▊        | 56/300 [00:55<03:01,  1.34it/s]sample_actions_time_s=4.1413 (num_samples=8)
-run_rejection_sampling_time_s=3.7190
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:02<04:20,  1.08s/it]sample_actions_time_s=4.1293 (num_samples=8)
-run_rejection_sampling_time_s=3.8826
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:11<04:35,  1.17s/it] 24%|██▎       | 71/300 [01:11<03:02,  1.26it/s]sample_actions_time_s=4.0957 (num_samples=8)
-run_rejection_sampling_time_s=3.9432
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▍       | 74/300 [01:19<04:21,  1.16s/it] 27%|██▋       | 80/300 [01:19<02:46,  1.32it/s]sample_actions_time_s=4.1369 (num_samples=8)
-run_rejection_sampling_time_s=4.0503
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 28%|██▊       | 84/300 [01:27<03:54,  1.08s/it]sample_actions_time_s=4.0833 (num_samples=8)
-run_rejection_sampling_time_s=3.9871
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|██▉       | 89/300 [01:35<04:24,  1.25s/it] 32%|███▏      | 95/300 [01:35<02:49,  1.21it/s]sample_actions_time_s=4.0863 (num_samples=8)
-run_rejection_sampling_time_s=3.9421
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 33%|███▎      | 98/300 [01:43<04:01,  1.20s/it] 35%|███▍      | 104/300 [01:44<02:30,  1.30it/s]sample_actions_time_s=4.0817 (num_samples=8)
-run_rejection_sampling_time_s=3.9635
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 108/300 [01:52<03:29,  1.09s/it]sample_actions_time_s=4.0752 (num_samples=8)
-run_rejection_sampling_time_s=3.9606
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [02:00<03:55,  1.26s/it] 40%|███▉      | 119/300 [02:00<02:29,  1.21it/s]sample_actions_time_s=4.1242 (num_samples=8)
-run_rejection_sampling_time_s=3.7693
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 122/300 [02:08<03:31,  1.19s/it] 43%|████▎     | 128/300 [02:08<02:11,  1.31it/s]sample_actions_time_s=4.0999 (num_samples=8)
-run_rejection_sampling_time_s=3.8598
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 43%|████▎     | 129/300 [02:16<03:00,  1.06s/it]
-[rollout 23/40] time_s=137.48 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 130, 'Success_Rate': 1.0, 'Rzz_List': 130, 'Pos_List': 130, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0889 (num_samples=8)
-run_rejection_sampling_time_s=3.6443
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:16,  7.88s/it]  3%|▎         | 8/300 [00:07<03:33,  1.37it/s]sample_actions_time_s=4.1271 (num_samples=8)
-run_rejection_sampling_time_s=3.7089
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 12/300 [00:15<06:02,  1.26s/it]sample_actions_time_s=4.0961 (num_samples=8)
-run_rejection_sampling_time_s=3.6093
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:32,  1.39s/it]sample_actions_time_s=4.0914 (num_samples=8)
-run_rejection_sampling_time_s=3.6830
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:26,  1.19s/it]sample_actions_time_s=4.0927 (num_samples=8)
-run_rejection_sampling_time_s=3.7386
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:55,  1.11s/it] 13%|█▎        | 40/300 [00:39<03:10,  1.36it/s]sample_actions_time_s=4.1000 (num_samples=8)
-run_rejection_sampling_time_s=3.7229
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:47<04:32,  1.06s/it]sample_actions_time_s=4.1282 (num_samples=8)
-run_rejection_sampling_time_s=3.7775
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<04:48,  1.15s/it] 19%|█▊        | 56/300 [00:55<03:02,  1.34it/s]sample_actions_time_s=4.0692 (num_samples=8)
-run_rejection_sampling_time_s=3.7436
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:03<04:20,  1.08s/it]sample_actions_time_s=4.0860 (num_samples=8)
-run_rejection_sampling_time_s=3.9055
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:11<04:35,  1.17s/it] 24%|██▎       | 71/300 [01:11<03:02,  1.26it/s]sample_actions_time_s=4.0854 (num_samples=8)
-run_rejection_sampling_time_s=3.9116
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▍       | 74/300 [01:19<04:20,  1.15s/it] 27%|██▋       | 80/300 [01:19<02:45,  1.33it/s]sample_actions_time_s=4.0702 (num_samples=8)
-run_rejection_sampling_time_s=3.8555
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 28%|██▊       | 84/300 [01:27<03:50,  1.07s/it]sample_actions_time_s=4.0753 (num_samples=8)
-run_rejection_sampling_time_s=3.8387
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|██▉       | 89/300 [01:35<04:19,  1.23s/it] 32%|███▏      | 96/300 [01:35<02:36,  1.30it/s]sample_actions_time_s=4.1038 (num_samples=8)
-run_rejection_sampling_time_s=3.8976
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 33%|███▎      | 99/300 [01:43<03:47,  1.13s/it]sample_actions_time_s=4.0754 (num_samples=8)
-run_rejection_sampling_time_s=3.9075
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 105/300 [01:52<03:55,  1.21s/it] 37%|███▋      | 111/300 [01:52<02:32,  1.24it/s]sample_actions_time_s=4.0741 (num_samples=8)
-run_rejection_sampling_time_s=3.9147
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 114/300 [02:00<03:37,  1.17s/it] 40%|████      | 120/300 [02:00<02:16,  1.32it/s]sample_actions_time_s=4.1062 (num_samples=8)
-run_rejection_sampling_time_s=3.7475
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████▏     | 124/300 [02:08<03:08,  1.07s/it] 42%|████▏     | 126/300 [02:08<02:57,  1.02s/it]
-[rollout 24/40] time_s=129.32 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 127, 'Success_Rate': 1.0, 'Rzz_List': 127, 'Pos_List': 127, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.1084 (num_samples=8)
-run_rejection_sampling_time_s=3.5726
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<38:59,  7.82s/it]  3%|▎         | 8/300 [00:07<03:31,  1.38it/s]sample_actions_time_s=4.1263 (num_samples=8)
-run_rejection_sampling_time_s=3.6109
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:23,  1.13s/it]sample_actions_time_s=4.1387 (num_samples=8)
-run_rejection_sampling_time_s=3.5993
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:41,  1.42s/it]  8%|▊         | 24/300 [00:23<03:29,  1.32it/s]sample_actions_time_s=4.1340 (num_samples=8)
-run_rejection_sampling_time_s=3.7075
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  9%|▉         | 28/300 [00:31<04:58,  1.10s/it]sample_actions_time_s=4.0852 (num_samples=8)
-run_rejection_sampling_time_s=3.7346
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<05:35,  1.26s/it] 13%|█▎        | 40/300 [00:39<03:17,  1.31it/s]sample_actions_time_s=4.1053 (num_samples=8)
-run_rejection_sampling_time_s=3.7554
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 15%|█▍        | 44/300 [00:47<04:31,  1.06s/it]sample_actions_time_s=4.1081 (num_samples=8)
-run_rejection_sampling_time_s=3.7647
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<05:06,  1.22s/it] 19%|█▊        | 56/300 [00:55<03:06,  1.31it/s]sample_actions_time_s=4.1051 (num_samples=8)
-run_rejection_sampling_time_s=3.7672
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|██        | 60/300 [01:03<04:12,  1.05s/it]sample_actions_time_s=4.1146 (num_samples=8)
-run_rejection_sampling_time_s=3.7717
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:11<04:45,  1.21s/it] 24%|██▍       | 72/300 [01:11<02:54,  1.30it/s]sample_actions_time_s=4.1089 (num_samples=8)
-run_rejection_sampling_time_s=3.7727
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▌       | 76/300 [01:19<03:55,  1.05s/it]sample_actions_time_s=4.1048 (num_samples=8)
-run_rejection_sampling_time_s=3.8078
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 81/300 [01:27<04:25,  1.21s/it] 29%|██▉       | 88/300 [01:27<02:43,  1.30it/s]sample_actions_time_s=4.1135 (num_samples=8)
-run_rejection_sampling_time_s=3.8690
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|███       | 91/300 [01:35<03:54,  1.12s/it]sample_actions_time_s=4.1112 (num_samples=8)
-run_rejection_sampling_time_s=3.8398
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:43<04:03,  1.20s/it] 34%|███▍      | 103/300 [01:43<02:39,  1.24it/s]sample_actions_time_s=4.1151 (num_samples=8)
-run_rejection_sampling_time_s=3.8465
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 106/300 [01:51<03:45,  1.16s/it] 37%|███▋      | 112/300 [01:51<02:22,  1.32it/s]sample_actions_time_s=4.1115 (num_samples=8)
-run_rejection_sampling_time_s=3.8959
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 39%|███▊      | 116/300 [01:59<03:17,  1.08s/it]sample_actions_time_s=4.0693 (num_samples=8)
-run_rejection_sampling_time_s=3.9147
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 40%|████      | 121/300 [02:08<03:42,  1.24s/it] 42%|████▏     | 127/300 [02:08<02:21,  1.22it/s]sample_actions_time_s=4.0885 (num_samples=8)
-run_rejection_sampling_time_s=3.7867
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 43%|████▎     | 130/300 [02:16<03:20,  1.18s/it]sample_actions_time_s=4.0735 (num_samples=8)
-run_rejection_sampling_time_s=3.7709
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 46%|████▌     | 137/300 [02:23<03:09,  1.16s/it] 48%|████▊     | 144/300 [02:24<01:56,  1.34it/s]sample_actions_time_s=4.0733 (num_samples=8)
-run_rejection_sampling_time_s=3.9356
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 49%|████▉     | 147/300 [02:32<02:48,  1.10s/it]sample_actions_time_s=4.1146 (num_samples=8)
-run_rejection_sampling_time_s=3.9255
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 51%|█████     | 153/300 [02:40<02:54,  1.19s/it] 53%|█████▎    | 159/300 [02:40<01:53,  1.24it/s]sample_actions_time_s=4.0900 (num_samples=8)
-run_rejection_sampling_time_s=3.8789
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 54%|█████▍    | 162/300 [02:48<02:39,  1.16s/it] 56%|█████▌    | 168/300 [02:48<01:39,  1.32it/s]sample_actions_time_s=4.1315 (num_samples=8)
-run_rejection_sampling_time_s=3.9310
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 57%|█████▋    | 172/300 [02:56<02:17,  1.08s/it]sample_actions_time_s=4.0753 (num_samples=8)
-run_rejection_sampling_time_s=3.8403
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 59%|█████▉    | 177/300 [03:04<02:32,  1.24s/it] 61%|██████▏   | 184/300 [03:04<01:29,  1.30it/s]sample_actions_time_s=4.1116 (num_samples=8)
-run_rejection_sampling_time_s=3.7841
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 61%|██████▏   | 184/300 [03:12<02:01,  1.05s/it]
-[rollout 25/40] time_s=193.77 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 185, 'Success_Rate': 1.0, 'Rzz_List': 185, 'Pos_List': 185, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0638 (num_samples=8)
-run_rejection_sampling_time_s=3.6149
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:02,  7.83s/it]  2%|▏         | 6/300 [00:07<04:48,  1.02it/s]sample_actions_time_s=4.0990 (num_samples=8)
-run_rejection_sampling_time_s=3.7893
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  3%|▎         | 9/300 [00:15<08:13,  1.69s/it]sample_actions_time_s=4.0730 (num_samples=8)
-run_rejection_sampling_time_s=3.6944
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<05:54,  1.25s/it]sample_actions_time_s=4.0816 (num_samples=8)
-run_rejection_sampling_time_s=3.7240
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:10,  1.13s/it] 11%|█         | 32/300 [00:31<03:12,  1.39it/s]sample_actions_time_s=4.0784 (num_samples=8)
-run_rejection_sampling_time_s=3.7514
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 12%|█▏        | 35/300 [00:39<04:43,  1.07s/it]sample_actions_time_s=4.1070 (num_samples=8)
-run_rejection_sampling_time_s=3.7896
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▎        | 41/300 [00:47<05:00,  1.16s/it] 16%|█▌        | 48/300 [00:47<03:06,  1.35it/s]sample_actions_time_s=4.1151 (num_samples=8)
-run_rejection_sampling_time_s=3.8042
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 17%|█▋        | 51/300 [00:55<04:31,  1.09s/it]sample_actions_time_s=4.1212 (num_samples=8)
-run_rejection_sampling_time_s=3.7873
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 19%|█▉        | 57/300 [01:03<04:45,  1.17s/it] 21%|██▏       | 64/300 [01:03<02:57,  1.33it/s]sample_actions_time_s=4.0800 (num_samples=8)
-run_rejection_sampling_time_s=3.8414
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 67/300 [01:11<04:16,  1.10s/it]sample_actions_time_s=4.0717 (num_samples=8)
-run_rejection_sampling_time_s=3.9233
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 24%|██▍       | 73/300 [01:19<04:29,  1.19s/it] 26%|██▋       | 79/300 [01:19<02:57,  1.25it/s]sample_actions_time_s=4.0768 (num_samples=8)
-run_rejection_sampling_time_s=3.9170
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 82/300 [01:28<04:12,  1.16s/it] 29%|██▉       | 88/300 [01:28<02:40,  1.32it/s]sample_actions_time_s=4.0786 (num_samples=8)
-run_rejection_sampling_time_s=3.9114
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 31%|███       | 92/300 [01:36<03:43,  1.07s/it]sample_actions_time_s=4.0883 (num_samples=8)
-run_rejection_sampling_time_s=3.9310
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:44<04:12,  1.24s/it] 35%|███▍      | 104/300 [01:44<02:31,  1.29it/s]sample_actions_time_s=4.0750 (num_samples=8)
-run_rejection_sampling_time_s=3.9230
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 107/300 [01:52<03:39,  1.14s/it]sample_actions_time_s=4.0678 (num_samples=8)
-run_rejection_sampling_time_s=3.9591
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [02:00<03:46,  1.21s/it] 40%|███▉      | 119/300 [02:00<02:27,  1.23it/s]sample_actions_time_s=4.0771 (num_samples=8)
-run_rejection_sampling_time_s=3.7574
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 122/300 [02:08<03:26,  1.16s/it] 42%|████▏     | 126/300 [02:08<02:57,  1.02s/it]
-[rollout 26/40] time_s=129.73 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 127, 'Success_Rate': 1.0, 'Rzz_List': 127, 'Pos_List': 127, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.1119 (num_samples=8)
-run_rejection_sampling_time_s=3.5985
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:09,  7.86s/it]  2%|▏         | 5/300 [00:07<05:51,  1.19s/it]sample_actions_time_s=4.0954 (num_samples=8)
-run_rejection_sampling_time_s=3.7497
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  3%|▎         | 9/300 [00:15<07:52,  1.62s/it]  5%|▌         | 16/300 [00:15<03:16,  1.44it/s]sample_actions_time_s=4.0716 (num_samples=8)
-run_rejection_sampling_time_s=3.6813
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  7%|▋         | 20/300 [00:23<05:07,  1.10s/it]sample_actions_time_s=4.1141 (num_samples=8)
-run_rejection_sampling_time_s=3.7885
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:51,  1.28s/it] 11%|█         | 32/300 [00:31<03:19,  1.34it/s]sample_actions_time_s=4.1141 (num_samples=8)
-run_rejection_sampling_time_s=3.8126
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 12%|█▏        | 36/300 [00:39<04:41,  1.07s/it]sample_actions_time_s=4.1039 (num_samples=8)
-run_rejection_sampling_time_s=3.8188
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▎        | 41/300 [00:47<05:19,  1.23s/it] 16%|█▌        | 48/300 [00:47<03:12,  1.31it/s]sample_actions_time_s=4.0812 (num_samples=8)
-run_rejection_sampling_time_s=3.7938
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 17%|█▋        | 52/300 [00:55<04:21,  1.06s/it]sample_actions_time_s=4.0739 (num_samples=8)
-run_rejection_sampling_time_s=3.8420
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 19%|█▉        | 57/300 [01:03<04:56,  1.22s/it] 21%|██▏       | 64/300 [01:03<03:01,  1.30it/s]sample_actions_time_s=4.1081 (num_samples=8)
-run_rejection_sampling_time_s=4.0578
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 67/300 [01:12<04:24,  1.14s/it]sample_actions_time_s=4.1048 (num_samples=8)
-run_rejection_sampling_time_s=4.0233
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 24%|██▍       | 73/300 [01:20<04:36,  1.22s/it] 26%|██▋       | 79/300 [01:20<03:01,  1.22it/s]sample_actions_time_s=4.1019 (num_samples=8)
-run_rejection_sampling_time_s=3.9869
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 82/300 [01:28<04:17,  1.18s/it] 29%|██▉       | 88/300 [01:28<02:43,  1.30it/s]sample_actions_time_s=4.0601 (num_samples=8)
-run_rejection_sampling_time_s=3.9388
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 31%|███       | 92/300 [01:36<03:45,  1.08s/it]sample_actions_time_s=4.0585 (num_samples=8)
-run_rejection_sampling_time_s=4.1560
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:45<04:16,  1.26s/it] 34%|███▍      | 103/300 [01:45<02:43,  1.20it/s]sample_actions_time_s=4.0766 (num_samples=8)
-run_rejection_sampling_time_s=4.1229
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 106/300 [01:53<03:55,  1.21s/it] 37%|███▋      | 112/300 [01:53<02:26,  1.28it/s]sample_actions_time_s=4.0562 (num_samples=8)
-run_rejection_sampling_time_s=3.8892
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 39%|███▊      | 116/300 [02:01<03:21,  1.09s/it]sample_actions_time_s=4.0637 (num_samples=8)
-run_rejection_sampling_time_s=3.7859
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 40%|████      | 120/300 [02:09<03:14,  1.08s/it]
-[rollout 27/40] time_s=130.67 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 121, 'Success_Rate': 1.0, 'Rzz_List': 121, 'Pos_List': 121, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0838 (num_samples=8)
-run_rejection_sampling_time_s=3.6280
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:08,  7.85s/it]  3%|▎         | 8/300 [00:07<03:32,  1.38it/s]sample_actions_time_s=4.0978 (num_samples=8)
-run_rejection_sampling_time_s=3.6564
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:24,  1.13s/it]sample_actions_time_s=4.0803 (num_samples=8)
-run_rejection_sampling_time_s=3.6019
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:40,  1.42s/it]sample_actions_time_s=4.0936 (num_samples=8)
-run_rejection_sampling_time_s=3.6850
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:29,  1.20s/it] 11%|█         | 32/300 [00:31<03:18,  1.35it/s]sample_actions_time_s=4.1151 (num_samples=8)
-run_rejection_sampling_time_s=3.6979
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 12%|█▏        | 35/300 [00:39<04:51,  1.10s/it]sample_actions_time_s=4.1170 (num_samples=8)
-run_rejection_sampling_time_s=3.7661
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▎        | 41/300 [00:47<05:06,  1.18s/it] 16%|█▌        | 48/300 [00:47<03:08,  1.33it/s]sample_actions_time_s=4.1185 (num_samples=8)
-run_rejection_sampling_time_s=3.7644
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 17%|█▋        | 52/300 [00:55<04:17,  1.04s/it]sample_actions_time_s=4.1129 (num_samples=8)
-run_rejection_sampling_time_s=3.8021
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 19%|█▉        | 57/300 [01:03<04:51,  1.20s/it] 21%|██▏       | 64/300 [01:03<03:00,  1.31it/s]sample_actions_time_s=4.0914 (num_samples=8)
-run_rejection_sampling_time_s=3.8814
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 67/300 [01:11<04:19,  1.12s/it]sample_actions_time_s=4.0845 (num_samples=8)
-run_rejection_sampling_time_s=3.9413
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 24%|██▍       | 73/300 [01:19<04:31,  1.20s/it] 26%|██▋       | 79/300 [01:19<02:58,  1.24it/s]sample_actions_time_s=4.0923 (num_samples=8)
-run_rejection_sampling_time_s=3.9406
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 82/300 [01:27<04:14,  1.17s/it] 29%|██▉       | 88/300 [01:27<02:41,  1.31it/s]sample_actions_time_s=4.0858 (num_samples=8)
-run_rejection_sampling_time_s=3.9687
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 31%|███       | 92/300 [01:36<03:44,  1.08s/it]sample_actions_time_s=4.0826 (num_samples=8)
-run_rejection_sampling_time_s=3.9648
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:44<04:13,  1.25s/it] 34%|███▍      | 103/300 [01:44<02:42,  1.22it/s]sample_actions_time_s=4.0885 (num_samples=8)
-run_rejection_sampling_time_s=4.0192
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 106/300 [01:52<03:52,  1.20s/it] 37%|███▋      | 112/300 [01:52<02:25,  1.30it/s]sample_actions_time_s=4.0956 (num_samples=8)
-run_rejection_sampling_time_s=3.9122
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 39%|███▊      | 116/300 [02:00<03:20,  1.09s/it]sample_actions_time_s=4.0949 (num_samples=8)
-run_rejection_sampling_time_s=3.8100
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 40%|████      | 121/300 [02:08<03:43,  1.25s/it] 40%|████      | 121/300 [02:08<03:10,  1.06s/it]
-[rollout 28/40] time_s=129.75 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 122, 'Success_Rate': 1.0, 'Rzz_List': 122, 'Pos_List': 122, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0878 (num_samples=8)
-run_rejection_sampling_time_s=3.6118
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:06,  7.85s/it]  3%|▎         | 8/300 [00:07<03:32,  1.38it/s]sample_actions_time_s=4.0892 (num_samples=8)
-run_rejection_sampling_time_s=3.6558
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:24,  1.13s/it]sample_actions_time_s=4.1007 (num_samples=8)
-run_rejection_sampling_time_s=3.6206
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:41,  1.42s/it]sample_actions_time_s=4.1020 (num_samples=8)
-run_rejection_sampling_time_s=3.6689
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:30,  1.20s/it]sample_actions_time_s=4.0948 (num_samples=8)
-run_rejection_sampling_time_s=3.7195
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:57,  1.11s/it] 13%|█▎        | 40/300 [00:39<03:11,  1.36it/s]sample_actions_time_s=4.0978 (num_samples=8)
-run_rejection_sampling_time_s=3.7784
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:47<04:34,  1.07s/it]sample_actions_time_s=4.1227 (num_samples=8)
-run_rejection_sampling_time_s=3.7867
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<04:50,  1.16s/it] 19%|█▊        | 56/300 [00:55<03:02,  1.33it/s]sample_actions_time_s=4.1228 (num_samples=8)
-run_rejection_sampling_time_s=4.0877
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:03<04:27,  1.11s/it]sample_actions_time_s=4.1013 (num_samples=8)
-run_rejection_sampling_time_s=4.1366
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:12<04:42,  1.20s/it] 24%|██▎       | 71/300 [01:12<03:07,  1.22it/s]sample_actions_time_s=4.0731 (num_samples=8)
-run_rejection_sampling_time_s=4.0105
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▍       | 74/300 [01:20<04:25,  1.17s/it] 27%|██▋       | 80/300 [01:20<02:49,  1.30it/s]sample_actions_time_s=4.0671 (num_samples=8)
-run_rejection_sampling_time_s=4.0122
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 28%|██▊       | 84/300 [01:28<03:54,  1.09s/it]sample_actions_time_s=4.0929 (num_samples=8)
-run_rejection_sampling_time_s=3.9596
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|██▉       | 89/300 [01:36<04:24,  1.25s/it] 32%|███▏      | 96/300 [01:36<02:39,  1.28it/s]sample_actions_time_s=4.1210 (num_samples=8)
-run_rejection_sampling_time_s=3.9844
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 33%|███▎      | 99/300 [01:45<03:50,  1.15s/it]sample_actions_time_s=4.0961 (num_samples=8)
-run_rejection_sampling_time_s=4.0118
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 105/300 [01:53<03:58,  1.23s/it] 37%|███▋      | 111/300 [01:53<02:35,  1.22it/s]sample_actions_time_s=4.0907 (num_samples=8)
-run_rejection_sampling_time_s=3.9701
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 114/300 [02:01<03:40,  1.18s/it]sample_actions_time_s=4.1002 (num_samples=8)
-run_rejection_sampling_time_s=3.8368
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 40%|████      | 121/300 [02:09<03:29,  1.17s/it] 43%|████▎     | 128/300 [02:09<02:10,  1.32it/s]sample_actions_time_s=4.0868 (num_samples=8)
-run_rejection_sampling_time_s=3.7953
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 43%|████▎     | 130/300 [02:17<02:59,  1.06s/it]
-[rollout 29/40] time_s=138.59 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 131, 'Success_Rate': 1.0, 'Rzz_List': 131, 'Pos_List': 131, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0799 (num_samples=8)
-run_rejection_sampling_time_s=3.6128
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:02,  7.83s/it]  3%|▎         | 8/300 [00:07<03:31,  1.38it/s]sample_actions_time_s=4.0777 (num_samples=8)
-run_rejection_sampling_time_s=3.7725
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:26,  1.14s/it]sample_actions_time_s=4.0743 (num_samples=8)
-run_rejection_sampling_time_s=3.6992
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:44,  1.43s/it]sample_actions_time_s=4.0681 (num_samples=8)
-run_rejection_sampling_time_s=3.7318
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:32,  1.21s/it]sample_actions_time_s=4.0699 (num_samples=8)
-run_rejection_sampling_time_s=3.7412
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:58,  1.12s/it] 13%|█▎        | 40/300 [00:39<03:12,  1.35it/s]sample_actions_time_s=4.0777 (num_samples=8)
-run_rejection_sampling_time_s=3.8825
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:47<04:36,  1.07s/it]sample_actions_time_s=4.0846 (num_samples=8)
-run_rejection_sampling_time_s=3.8787
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<04:51,  1.16s/it] 19%|█▊        | 56/300 [00:55<03:04,  1.32it/s]sample_actions_time_s=4.0799 (num_samples=8)
-run_rejection_sampling_time_s=3.8589
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:03<04:24,  1.10s/it]sample_actions_time_s=4.0833 (num_samples=8)
-run_rejection_sampling_time_s=4.0617
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:12<04:39,  1.19s/it] 24%|██▎       | 71/300 [01:12<03:05,  1.24it/s]sample_actions_time_s=4.0961 (num_samples=8)
-run_rejection_sampling_time_s=3.9856
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▍       | 74/300 [01:20<04:23,  1.17s/it] 27%|██▋       | 80/300 [01:20<02:48,  1.31it/s]sample_actions_time_s=4.0844 (num_samples=8)
-run_rejection_sampling_time_s=3.9184
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 28%|██▊       | 84/300 [01:28<03:52,  1.08s/it]sample_actions_time_s=4.0829 (num_samples=8)
-run_rejection_sampling_time_s=3.9250
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|██▉       | 89/300 [01:36<04:22,  1.24s/it] 32%|███▏      | 95/300 [01:36<02:48,  1.22it/s]sample_actions_time_s=4.0851 (num_samples=8)
-run_rejection_sampling_time_s=3.9759
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 33%|███▎      | 98/300 [01:44<04:01,  1.19s/it] 35%|███▍      | 104/300 [01:44<02:30,  1.30it/s]sample_actions_time_s=4.0796 (num_samples=8)
-run_rejection_sampling_time_s=3.9996
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 108/300 [01:53<03:29,  1.09s/it]sample_actions_time_s=4.0853 (num_samples=8)
-run_rejection_sampling_time_s=3.9185
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [02:01<03:55,  1.26s/it] 40%|███▉      | 119/300 [02:01<02:29,  1.21it/s]sample_actions_time_s=4.0932 (num_samples=8)
-run_rejection_sampling_time_s=3.8378
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 122/300 [02:09<03:31,  1.19s/it] 41%|████      | 123/300 [02:09<03:05,  1.05s/it]
-[rollout 30/40] time_s=130.27 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 124, 'Success_Rate': 1.0, 'Rzz_List': 124, 'Pos_List': 124, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0797 (num_samples=8)
-run_rejection_sampling_time_s=3.6016
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<38:59,  7.82s/it]  2%|▏         | 6/300 [00:07<04:48,  1.02it/s]sample_actions_time_s=4.0846 (num_samples=8)
-run_rejection_sampling_time_s=3.7426
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  3%|▎         | 9/300 [00:15<08:10,  1.69s/it]  5%|▌         | 16/300 [00:15<03:19,  1.42it/s]sample_actions_time_s=4.0695 (num_samples=8)
-run_rejection_sampling_time_s=3.6913
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  7%|▋         | 20/300 [00:23<05:10,  1.11s/it]sample_actions_time_s=4.0779 (num_samples=8)
-run_rejection_sampling_time_s=3.7216
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:51,  1.28s/it] 11%|█         | 32/300 [00:31<03:19,  1.34it/s]sample_actions_time_s=4.0805 (num_samples=8)
-run_rejection_sampling_time_s=3.8128
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 12%|█▏        | 36/300 [00:39<04:40,  1.06s/it]sample_actions_time_s=4.1261 (num_samples=8)
-run_rejection_sampling_time_s=3.8007
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▎        | 41/300 [00:47<05:19,  1.23s/it] 16%|█▌        | 48/300 [00:47<03:12,  1.31it/s]sample_actions_time_s=4.1336 (num_samples=8)
-run_rejection_sampling_time_s=3.9412
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 17%|█▋        | 52/300 [00:55<04:24,  1.07s/it]sample_actions_time_s=4.0699 (num_samples=8)
-run_rejection_sampling_time_s=3.9070
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 19%|█▉        | 57/300 [01:03<04:58,  1.23s/it] 21%|██▏       | 64/300 [01:04<03:02,  1.29it/s]sample_actions_time_s=4.1158 (num_samples=8)
-run_rejection_sampling_time_s=4.1071
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 67/300 [01:12<04:26,  1.15s/it]sample_actions_time_s=4.1042 (num_samples=8)
-run_rejection_sampling_time_s=4.0586
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 24%|██▍       | 73/300 [01:20<04:38,  1.23s/it] 26%|██▋       | 79/300 [01:20<03:02,  1.21it/s]sample_actions_time_s=4.1037 (num_samples=8)
-run_rejection_sampling_time_s=4.0353
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 82/300 [01:28<04:19,  1.19s/it] 29%|██▉       | 88/300 [01:29<02:44,  1.29it/s]sample_actions_time_s=4.1025 (num_samples=8)
-run_rejection_sampling_time_s=3.9398
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 31%|███       | 92/300 [01:37<03:46,  1.09s/it]sample_actions_time_s=4.1073 (num_samples=8)
-run_rejection_sampling_time_s=3.9859
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:45<04:15,  1.26s/it] 34%|███▍      | 103/300 [01:45<02:43,  1.21it/s]sample_actions_time_s=4.0985 (num_samples=8)
-run_rejection_sampling_time_s=3.9082
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 106/300 [01:53<03:52,  1.20s/it] 37%|███▋      | 112/300 [01:53<02:24,  1.30it/s]sample_actions_time_s=4.0829 (num_samples=8)
-run_rejection_sampling_time_s=3.8379
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 39%|███▊      | 116/300 [02:01<03:19,  1.08s/it]sample_actions_time_s=4.0834 (num_samples=8)
-run_rejection_sampling_time_s=3.7553
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 40%|████      | 121/300 [02:09<03:42,  1.24s/it] 41%|████▏     | 124/300 [02:09<03:03,  1.04s/it]
-[rollout 31/40] time_s=130.61 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 125, 'Success_Rate': 1.0, 'Rzz_List': 125, 'Pos_List': 125, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0911 (num_samples=8)
-run_rejection_sampling_time_s=3.6191
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:08,  7.85s/it]  3%|▎         | 8/300 [00:07<03:32,  1.38it/s]sample_actions_time_s=4.1003 (num_samples=8)
-run_rejection_sampling_time_s=3.6653
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:24,  1.13s/it]sample_actions_time_s=4.0897 (num_samples=8)
-run_rejection_sampling_time_s=3.6308
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:41,  1.42s/it]sample_actions_time_s=4.0865 (num_samples=8)
-run_rejection_sampling_time_s=3.6812
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:30,  1.20s/it]sample_actions_time_s=4.1013 (num_samples=8)
-run_rejection_sampling_time_s=3.7272
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:57,  1.11s/it] 13%|█▎        | 40/300 [00:39<03:11,  1.36it/s]sample_actions_time_s=4.1003 (num_samples=8)
-run_rejection_sampling_time_s=3.7193
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:47<04:33,  1.06s/it]sample_actions_time_s=4.1210 (num_samples=8)
-run_rejection_sampling_time_s=3.7913
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<04:49,  1.15s/it] 19%|█▊        | 56/300 [00:55<03:02,  1.34it/s]sample_actions_time_s=4.1012 (num_samples=8)
-run_rejection_sampling_time_s=3.7696
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:03<04:21,  1.09s/it]sample_actions_time_s=4.0903 (num_samples=8)
-run_rejection_sampling_time_s=3.7389
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:11<04:33,  1.17s/it] 24%|██▍       | 72/300 [01:11<02:51,  1.33it/s]sample_actions_time_s=4.0874 (num_samples=8)
-run_rejection_sampling_time_s=3.7980
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▌       | 75/300 [01:19<04:06,  1.09s/it]sample_actions_time_s=4.1092 (num_samples=8)
-run_rejection_sampling_time_s=3.8197
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 81/300 [01:27<04:17,  1.18s/it] 29%|██▉       | 88/300 [01:27<02:40,  1.32it/s]sample_actions_time_s=4.0935 (num_samples=8)
-run_rejection_sampling_time_s=3.9419
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|███       | 91/300 [01:35<03:51,  1.11s/it]sample_actions_time_s=4.0953 (num_samples=8)
-run_rejection_sampling_time_s=3.9400
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:43<04:02,  1.19s/it] 34%|███▍      | 103/300 [01:43<02:39,  1.24it/s]sample_actions_time_s=4.0833 (num_samples=8)
-run_rejection_sampling_time_s=3.8465
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 106/300 [01:51<03:44,  1.16s/it] 37%|███▋      | 112/300 [01:51<02:22,  1.32it/s]sample_actions_time_s=4.0838 (num_samples=8)
-run_rejection_sampling_time_s=3.9133
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 39%|███▊      | 116/300 [01:59<03:17,  1.07s/it]sample_actions_time_s=4.0717 (num_samples=8)
-run_rejection_sampling_time_s=3.9276
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 40%|████      | 121/300 [02:08<03:42,  1.24s/it] 42%|████▏     | 127/300 [02:08<02:21,  1.22it/s]sample_actions_time_s=4.1250 (num_samples=8)
-run_rejection_sampling_time_s=4.0237
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 43%|████▎     | 130/300 [02:16<03:23,  1.20s/it] 45%|████▌     | 136/300 [02:16<02:06,  1.30it/s]sample_actions_time_s=4.1066 (num_samples=8)
-run_rejection_sampling_time_s=3.9427
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 47%|████▋     | 140/300 [02:24<02:54,  1.09s/it]sample_actions_time_s=4.1047 (num_samples=8)
-run_rejection_sampling_time_s=3.9583
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 48%|████▊     | 145/300 [02:32<03:15,  1.26s/it] 50%|█████     | 151/300 [02:32<02:03,  1.21it/s]sample_actions_time_s=4.0988 (num_samples=8)
-run_rejection_sampling_time_s=3.9408
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 51%|█████▏    | 154/300 [02:40<02:55,  1.20s/it]sample_actions_time_s=4.0818 (num_samples=8)
-run_rejection_sampling_time_s=3.9206
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 54%|█████▎    | 161/300 [02:49<02:44,  1.18s/it] 56%|█████▌    | 168/300 [02:49<01:40,  1.32it/s]sample_actions_time_s=4.0812 (num_samples=8)
-run_rejection_sampling_time_s=3.9598
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 57%|█████▋    | 171/300 [02:57<02:23,  1.11s/it]sample_actions_time_s=4.0873 (num_samples=8)
-run_rejection_sampling_time_s=3.8719
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 59%|█████▉    | 177/300 [03:05<02:26,  1.19s/it] 61%|██████▏   | 184/300 [03:05<01:28,  1.31it/s]sample_actions_time_s=4.0919 (num_samples=8)
-run_rejection_sampling_time_s=3.8483
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 61%|██████▏   | 184/300 [03:13<02:01,  1.05s/it]
-[rollout 32/40] time_s=194.48 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 185, 'Success_Rate': 1.0, 'Rzz_List': 185, 'Pos_List': 185, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0670 (num_samples=8)
-run_rejection_sampling_time_s=3.6353
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:08,  7.85s/it]  3%|▎         | 8/300 [00:07<03:32,  1.37it/s]sample_actions_time_s=4.1131 (num_samples=8)
-run_rejection_sampling_time_s=3.7034
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 12/300 [00:15<06:01,  1.26s/it]sample_actions_time_s=4.0994 (num_samples=8)
-run_rejection_sampling_time_s=3.6573
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:33,  1.39s/it]sample_actions_time_s=4.1137 (num_samples=8)
-run_rejection_sampling_time_s=3.6836
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:27,  1.19s/it]sample_actions_time_s=4.1113 (num_samples=8)
-run_rejection_sampling_time_s=3.7964
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:57,  1.11s/it] 13%|█▎        | 40/300 [00:39<03:11,  1.36it/s]sample_actions_time_s=4.1167 (num_samples=8)
-run_rejection_sampling_time_s=3.9320
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:47<04:36,  1.08s/it]sample_actions_time_s=4.1017 (num_samples=8)
-run_rejection_sampling_time_s=3.9016
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<04:52,  1.17s/it] 19%|█▊        | 56/300 [00:56<03:04,  1.32it/s]sample_actions_time_s=4.0983 (num_samples=8)
-run_rejection_sampling_time_s=3.8982
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:04<04:25,  1.10s/it]sample_actions_time_s=4.1204 (num_samples=8)
-run_rejection_sampling_time_s=3.9082
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:12<04:38,  1.19s/it] 24%|██▍       | 72/300 [01:12<02:54,  1.31it/s]sample_actions_time_s=4.0845 (num_samples=8)
-run_rejection_sampling_time_s=4.0862
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▌       | 75/300 [01:20<04:12,  1.12s/it]sample_actions_time_s=4.1230 (num_samples=8)
-run_rejection_sampling_time_s=4.0223
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 81/300 [01:28<04:24,  1.21s/it] 29%|██▉       | 87/300 [01:28<02:54,  1.22it/s]sample_actions_time_s=4.0952 (num_samples=8)
-run_rejection_sampling_time_s=3.9981
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|███       | 90/300 [01:37<04:07,  1.18s/it]sample_actions_time_s=4.0852 (num_samples=8)
-run_rejection_sampling_time_s=3.9517
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:45<03:58,  1.17s/it] 35%|███▍      | 104/300 [01:45<02:29,  1.31it/s]sample_actions_time_s=4.1115 (num_samples=8)
-run_rejection_sampling_time_s=3.9774
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 107/300 [01:53<03:34,  1.11s/it]sample_actions_time_s=4.0932 (num_samples=8)
-run_rejection_sampling_time_s=4.0548
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [02:01<03:44,  1.20s/it] 40%|███▉      | 119/300 [02:01<02:27,  1.23it/s]sample_actions_time_s=4.1019 (num_samples=8)
-run_rejection_sampling_time_s=3.9021
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 122/300 [02:09<03:27,  1.17s/it] 43%|████▎     | 128/300 [02:09<02:11,  1.31it/s]sample_actions_time_s=4.1009 (num_samples=8)
-run_rejection_sampling_time_s=3.8543
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 43%|████▎     | 128/300 [02:17<03:05,  1.08s/it]
-[rollout 33/40] time_s=138.99 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 129, 'Success_Rate': 1.0, 'Rzz_List': 129, 'Pos_List': 129, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0919 (num_samples=8)
-run_rejection_sampling_time_s=3.6372
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:16,  7.88s/it]  3%|▎         | 8/300 [00:07<03:33,  1.37it/s]sample_actions_time_s=4.1093 (num_samples=8)
-run_rejection_sampling_time_s=3.7564
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 12/300 [00:15<06:03,  1.26s/it]sample_actions_time_s=4.0719 (num_samples=8)
-run_rejection_sampling_time_s=3.7226
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:35,  1.40s/it]sample_actions_time_s=4.1240 (num_samples=8)
-run_rejection_sampling_time_s=3.7468
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:29,  1.20s/it]sample_actions_time_s=4.1038 (num_samples=8)
-run_rejection_sampling_time_s=3.8444
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:58,  1.12s/it] 13%|█▎        | 40/300 [00:39<03:12,  1.35it/s]sample_actions_time_s=4.1348 (num_samples=8)
-run_rejection_sampling_time_s=3.8295
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:47<04:36,  1.08s/it]sample_actions_time_s=4.0846 (num_samples=8)
-run_rejection_sampling_time_s=3.8279
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<04:51,  1.16s/it] 19%|█▊        | 56/300 [00:56<03:04,  1.33it/s]sample_actions_time_s=4.1068 (num_samples=8)
-run_rejection_sampling_time_s=3.8821
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:04<04:24,  1.10s/it]sample_actions_time_s=4.1107 (num_samples=8)
-run_rejection_sampling_time_s=3.9828
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:12<04:39,  1.19s/it] 24%|██▎       | 71/300 [01:12<03:04,  1.24it/s]sample_actions_time_s=4.1053 (num_samples=8)
-run_rejection_sampling_time_s=3.9576
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▍       | 74/300 [01:20<04:23,  1.17s/it]sample_actions_time_s=4.0485 (num_samples=8)
-run_rejection_sampling_time_s=3.9495
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 81/300 [01:28<04:14,  1.16s/it] 29%|██▉       | 88/300 [01:28<02:40,  1.32it/s]sample_actions_time_s=4.0856 (num_samples=8)
-run_rejection_sampling_time_s=3.9237
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|███       | 91/300 [01:36<03:50,  1.10s/it]sample_actions_time_s=4.0920 (num_samples=8)
-run_rejection_sampling_time_s=3.9460
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:44<04:00,  1.19s/it] 35%|███▍      | 104/300 [01:45<02:29,  1.31it/s]sample_actions_time_s=4.0998 (num_samples=8)
-run_rejection_sampling_time_s=4.0323
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 107/300 [01:53<03:36,  1.12s/it]sample_actions_time_s=4.0587 (num_samples=8)
-run_rejection_sampling_time_s=3.8951
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [02:01<03:43,  1.20s/it] 40%|███▉      | 119/300 [02:01<02:26,  1.23it/s]sample_actions_time_s=4.0945 (num_samples=8)
-run_rejection_sampling_time_s=3.7943
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 122/300 [02:09<03:26,  1.16s/it] 41%|████      | 123/300 [02:09<03:06,  1.05s/it]
-[rollout 34/40] time_s=130.45 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 124, 'Success_Rate': 1.0, 'Rzz_List': 124, 'Pos_List': 124, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0848 (num_samples=8)
-run_rejection_sampling_time_s=3.6128
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:04,  7.84s/it]  3%|▎         | 8/300 [00:07<03:32,  1.38it/s]sample_actions_time_s=4.1095 (num_samples=8)
-run_rejection_sampling_time_s=3.6260
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 12/300 [00:15<05:59,  1.25s/it]sample_actions_time_s=4.0818 (num_samples=8)
-run_rejection_sampling_time_s=3.5853
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:29,  1.38s/it]sample_actions_time_s=4.0953 (num_samples=8)
-run_rejection_sampling_time_s=3.6279
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:24,  1.18s/it] 11%|█         | 32/300 [00:31<03:16,  1.36it/s]sample_actions_time_s=4.0922 (num_samples=8)
-run_rejection_sampling_time_s=3.7180
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 12%|█▏        | 35/300 [00:39<04:49,  1.09s/it]sample_actions_time_s=4.1139 (num_samples=8)
-run_rejection_sampling_time_s=3.7539
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▎        | 41/300 [00:47<05:04,  1.17s/it] 16%|█▌        | 48/300 [00:47<03:07,  1.34it/s]sample_actions_time_s=4.1107 (num_samples=8)
-run_rejection_sampling_time_s=3.7753
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 17%|█▋        | 51/300 [00:55<04:32,  1.10s/it]sample_actions_time_s=4.1008 (num_samples=8)
-run_rejection_sampling_time_s=3.7945
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 19%|█▉        | 57/300 [01:03<04:46,  1.18s/it] 21%|██▏       | 64/300 [01:03<02:57,  1.33it/s]sample_actions_time_s=4.0727 (num_samples=8)
-run_rejection_sampling_time_s=4.0120
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 67/300 [01:11<04:18,  1.11s/it]sample_actions_time_s=4.0833 (num_samples=8)
-run_rejection_sampling_time_s=4.0273
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 24%|██▍       | 73/300 [01:19<04:32,  1.20s/it] 26%|██▋       | 79/300 [01:19<02:59,  1.23it/s]sample_actions_time_s=4.0781 (num_samples=8)
-run_rejection_sampling_time_s=3.9435
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 82/300 [01:27<04:14,  1.17s/it] 29%|██▉       | 88/300 [01:28<02:41,  1.31it/s]sample_actions_time_s=4.0715 (num_samples=8)
-run_rejection_sampling_time_s=3.8707
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 31%|███       | 92/300 [01:36<03:43,  1.07s/it]sample_actions_time_s=4.0718 (num_samples=8)
-run_rejection_sampling_time_s=3.8876
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:44<04:11,  1.24s/it] 35%|███▍      | 104/300 [01:44<02:31,  1.30it/s]sample_actions_time_s=4.1042 (num_samples=8)
-run_rejection_sampling_time_s=3.8679
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 107/300 [01:52<03:38,  1.13s/it]sample_actions_time_s=4.0865 (num_samples=8)
-run_rejection_sampling_time_s=3.8902
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [02:00<03:45,  1.21s/it] 40%|████      | 120/300 [02:00<02:18,  1.30it/s]sample_actions_time_s=4.0879 (num_samples=8)
-run_rejection_sampling_time_s=3.8805
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 123/300 [02:08<03:18,  1.12s/it]sample_actions_time_s=4.0883 (num_samples=8)
-run_rejection_sampling_time_s=3.8455
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 43%|████▎     | 129/300 [02:16<03:24,  1.20s/it] 44%|████▍     | 132/300 [02:16<02:53,  1.03s/it]
-[rollout 35/40] time_s=137.59 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 133, 'Success_Rate': 1.0, 'Rzz_List': 133, 'Pos_List': 133, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0931 (num_samples=8)
-run_rejection_sampling_time_s=3.6092
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:04,  7.84s/it]  3%|▎         | 8/300 [00:07<03:32,  1.38it/s]sample_actions_time_s=4.0893 (num_samples=8)
-run_rejection_sampling_time_s=3.6356
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:23,  1.13s/it]sample_actions_time_s=4.0751 (num_samples=8)
-run_rejection_sampling_time_s=3.5951
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:39,  1.41s/it]sample_actions_time_s=4.0835 (num_samples=8)
-run_rejection_sampling_time_s=3.6399
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:28,  1.19s/it]sample_actions_time_s=4.0880 (num_samples=8)
-run_rejection_sampling_time_s=3.7332
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:56,  1.11s/it] 13%|█▎        | 40/300 [00:39<03:10,  1.36it/s]sample_actions_time_s=4.1081 (num_samples=8)
-run_rejection_sampling_time_s=3.7578
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:47<04:33,  1.06s/it]sample_actions_time_s=4.1011 (num_samples=8)
-run_rejection_sampling_time_s=3.7811
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<04:49,  1.15s/it] 19%|█▊        | 56/300 [00:55<03:02,  1.34it/s]sample_actions_time_s=4.0957 (num_samples=8)
-run_rejection_sampling_time_s=3.8211
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:03<04:22,  1.09s/it]sample_actions_time_s=4.0802 (num_samples=8)
-run_rejection_sampling_time_s=3.9177
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:11<04:36,  1.18s/it] 24%|██▎       | 71/300 [01:11<03:02,  1.25it/s]sample_actions_time_s=4.0950 (num_samples=8)
-run_rejection_sampling_time_s=3.9197
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▍       | 74/300 [01:19<04:21,  1.16s/it] 27%|██▋       | 80/300 [01:19<02:46,  1.32it/s]sample_actions_time_s=4.0424 (num_samples=8)
-run_rejection_sampling_time_s=3.9045
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 28%|██▊       | 84/300 [01:27<03:50,  1.07s/it]sample_actions_time_s=4.0500 (num_samples=8)
-run_rejection_sampling_time_s=3.9422
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|██▉       | 89/300 [01:35<04:21,  1.24s/it] 32%|███▏      | 96/300 [01:35<02:37,  1.30it/s]sample_actions_time_s=4.0661 (num_samples=8)
-run_rejection_sampling_time_s=3.9305
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 33%|███▎      | 99/300 [01:43<03:47,  1.13s/it]sample_actions_time_s=4.0755 (num_samples=8)
-run_rejection_sampling_time_s=3.8863
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 105/300 [01:51<03:55,  1.21s/it] 37%|███▋      | 111/300 [01:52<02:33,  1.24it/s]sample_actions_time_s=4.0665 (num_samples=8)
-run_rejection_sampling_time_s=3.9058
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 114/300 [02:00<03:37,  1.17s/it]sample_actions_time_s=4.0620 (num_samples=8)
-run_rejection_sampling_time_s=3.7766
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 40%|████      | 121/300 [02:08<03:26,  1.16s/it] 43%|████▎     | 128/300 [02:08<02:08,  1.34it/s]sample_actions_time_s=4.0924 (num_samples=8)
-run_rejection_sampling_time_s=3.7339
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 43%|████▎     | 129/300 [02:16<03:00,  1.05s/it]
-[rollout 36/40] time_s=137.10 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 130, 'Success_Rate': 1.0, 'Rzz_List': 130, 'Pos_List': 130, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0607 (num_samples=8)
-run_rejection_sampling_time_s=3.5415
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<38:38,  7.76s/it]  3%|▎         | 8/300 [00:07<03:29,  1.39it/s]sample_actions_time_s=4.0574 (num_samples=8)
-run_rejection_sampling_time_s=3.5507
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 12/300 [00:15<05:53,  1.23s/it]sample_actions_time_s=4.0791 (num_samples=8)
-run_rejection_sampling_time_s=3.6051
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:27,  1.37s/it]sample_actions_time_s=4.0533 (num_samples=8)
-run_rejection_sampling_time_s=3.6474
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:22,  1.17s/it] 11%|█         | 32/300 [00:31<03:15,  1.37it/s]sample_actions_time_s=4.0769 (num_samples=8)
-run_rejection_sampling_time_s=3.6963
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 12%|█▏        | 35/300 [00:39<04:47,  1.09s/it]sample_actions_time_s=4.0622 (num_samples=8)
-run_rejection_sampling_time_s=3.7342
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▎        | 41/300 [00:46<05:02,  1.17s/it] 16%|█▌        | 48/300 [00:47<03:06,  1.35it/s]sample_actions_time_s=4.0610 (num_samples=8)
-run_rejection_sampling_time_s=3.7409
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 17%|█▋        | 52/300 [00:54<04:14,  1.02s/it]sample_actions_time_s=4.0803 (num_samples=8)
-run_rejection_sampling_time_s=3.7613
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 19%|█▉        | 57/300 [01:02<04:48,  1.19s/it] 21%|██▏       | 64/300 [01:02<02:58,  1.32it/s]sample_actions_time_s=4.0751 (num_samples=8)
-run_rejection_sampling_time_s=3.7762
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 67/300 [01:10<04:16,  1.10s/it]sample_actions_time_s=4.0555 (num_samples=8)
-run_rejection_sampling_time_s=3.9079
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 24%|██▍       | 73/300 [01:18<04:29,  1.19s/it] 26%|██▋       | 79/300 [01:18<02:56,  1.25it/s]sample_actions_time_s=4.0401 (num_samples=8)
-run_rejection_sampling_time_s=3.8845
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 82/300 [01:26<04:11,  1.15s/it]sample_actions_time_s=4.0379 (num_samples=8)
-run_rejection_sampling_time_s=3.9208
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|██▉       | 89/300 [01:35<04:03,  1.15s/it] 32%|███▏      | 95/300 [01:35<02:41,  1.27it/s]sample_actions_time_s=4.0709 (num_samples=8)
-run_rejection_sampling_time_s=3.9525
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 33%|███▎      | 98/300 [01:43<03:51,  1.14s/it] 35%|███▍      | 104/300 [01:43<02:27,  1.33it/s]sample_actions_time_s=4.0670 (num_samples=8)
-run_rejection_sampling_time_s=3.9749
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 108/300 [01:51<03:25,  1.07s/it]sample_actions_time_s=4.0935 (num_samples=8)
-run_rejection_sampling_time_s=3.9328
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [01:59<03:51,  1.24s/it] 40%|███▉      | 119/300 [01:59<02:27,  1.22it/s]sample_actions_time_s=4.0723 (num_samples=8)
-run_rejection_sampling_time_s=3.7762
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 122/300 [02:07<03:29,  1.18s/it] 42%|████▏     | 127/300 [02:07<02:53,  1.00s/it]
-[rollout 37/40] time_s=128.67 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 128, 'Success_Rate': 1.0, 'Rzz_List': 128, 'Pos_List': 128, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0691 (num_samples=8)
-run_rejection_sampling_time_s=3.5745
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<38:46,  7.78s/it]  3%|▎         | 8/300 [00:07<03:30,  1.39it/s]sample_actions_time_s=4.0873 (num_samples=8)
-run_rejection_sampling_time_s=3.6129
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:21,  1.12s/it]sample_actions_time_s=4.0658 (num_samples=8)
-run_rejection_sampling_time_s=3.5617
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:37,  1.41s/it]sample_actions_time_s=4.0835 (num_samples=8)
-run_rejection_sampling_time_s=3.6099
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:27,  1.19s/it]sample_actions_time_s=4.0767 (num_samples=8)
-run_rejection_sampling_time_s=3.7054
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:54,  1.10s/it] 13%|█▎        | 40/300 [00:39<03:09,  1.37it/s]sample_actions_time_s=4.0881 (num_samples=8)
-run_rejection_sampling_time_s=3.7150
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:46<04:31,  1.06s/it]sample_actions_time_s=4.0871 (num_samples=8)
-run_rejection_sampling_time_s=3.7165
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:54<04:47,  1.14s/it] 19%|█▊        | 56/300 [00:55<03:01,  1.35it/s]sample_actions_time_s=4.0643 (num_samples=8)
-run_rejection_sampling_time_s=3.7517
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:02<04:19,  1.08s/it]sample_actions_time_s=4.0681 (num_samples=8)
-run_rejection_sampling_time_s=3.7726
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:10<04:32,  1.16s/it] 24%|██▎       | 71/300 [01:10<03:00,  1.27it/s]sample_actions_time_s=4.0684 (num_samples=8)
-run_rejection_sampling_time_s=3.9694
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▍       | 74/300 [01:18<04:19,  1.15s/it] 27%|██▋       | 80/300 [01:19<02:45,  1.33it/s]sample_actions_time_s=4.0940 (num_samples=8)
-run_rejection_sampling_time_s=3.9542
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 28%|██▊       | 84/300 [01:27<03:51,  1.07s/it]sample_actions_time_s=4.0667 (num_samples=8)
-run_rejection_sampling_time_s=3.9267
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|██▉       | 89/300 [01:35<04:21,  1.24s/it] 32%|███▏      | 95/300 [01:35<02:47,  1.22it/s]sample_actions_time_s=4.0378 (num_samples=8)
-run_rejection_sampling_time_s=3.9733
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 33%|███▎      | 98/300 [01:43<03:59,  1.19s/it] 35%|███▍      | 104/300 [01:43<02:29,  1.31it/s]sample_actions_time_s=4.0406 (num_samples=8)
-run_rejection_sampling_time_s=3.9732
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 108/300 [01:51<03:28,  1.09s/it]sample_actions_time_s=4.0452 (num_samples=8)
-run_rejection_sampling_time_s=3.8888
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [01:59<03:53,  1.25s/it] 40%|███▉      | 119/300 [01:59<02:28,  1.22it/s]sample_actions_time_s=4.0441 (num_samples=8)
-run_rejection_sampling_time_s=3.7210
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 122/300 [02:07<03:29,  1.18s/it] 42%|████▏     | 125/300 [02:07<02:58,  1.02s/it]
-[rollout 38/40] time_s=128.72 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 126, 'Success_Rate': 1.0, 'Rzz_List': 126, 'Pos_List': 126, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.0327 (num_samples=8)
-run_rejection_sampling_time_s=3.5459
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<38:26,  7.72s/it]  3%|▎         | 8/300 [00:07<03:28,  1.40it/s]sample_actions_time_s=4.0499 (num_samples=8)
-run_rejection_sampling_time_s=3.6073
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:19,  1.11s/it]sample_actions_time_s=4.3519 (num_samples=8)
-run_rejection_sampling_time_s=3.6309
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:45,  1.43s/it]sample_actions_time_s=4.0746 (num_samples=8)
-run_rejection_sampling_time_s=3.6502
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:31,  1.20s/it] 11%|█         | 32/300 [00:31<03:19,  1.34it/s]sample_actions_time_s=4.0720 (num_samples=8)
-run_rejection_sampling_time_s=3.7161
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 12%|█▏        | 35/300 [00:39<04:52,  1.10s/it]sample_actions_time_s=4.1176 (num_samples=8)
-run_rejection_sampling_time_s=3.7510
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▎        | 41/300 [00:47<05:06,  1.18s/it] 16%|█▌        | 48/300 [00:47<03:08,  1.33it/s]sample_actions_time_s=4.1180 (num_samples=8)
-run_rejection_sampling_time_s=3.7712
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 17%|█▋        | 51/300 [00:55<04:33,  1.10s/it]sample_actions_time_s=4.0709 (num_samples=8)
-run_rejection_sampling_time_s=3.7823
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 19%|█▉        | 57/300 [01:03<04:46,  1.18s/it] 21%|██▏       | 64/300 [01:03<02:57,  1.33it/s]sample_actions_time_s=4.0681 (num_samples=8)
-run_rejection_sampling_time_s=3.9980
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 67/300 [01:11<04:18,  1.11s/it]sample_actions_time_s=4.1065 (num_samples=8)
-run_rejection_sampling_time_s=4.0183
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 24%|██▍       | 73/300 [01:19<04:32,  1.20s/it] 26%|██▋       | 79/300 [01:19<02:59,  1.23it/s]sample_actions_time_s=4.0887 (num_samples=8)
-run_rejection_sampling_time_s=3.9950
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 27%|██▋       | 82/300 [01:28<04:15,  1.17s/it] 29%|██▉       | 88/300 [01:28<02:42,  1.31it/s]sample_actions_time_s=4.0823 (num_samples=8)
-run_rejection_sampling_time_s=3.9218
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 31%|███       | 92/300 [01:36<03:44,  1.08s/it]sample_actions_time_s=4.0941 (num_samples=8)
-run_rejection_sampling_time_s=3.9582
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 32%|███▏      | 97/300 [01:44<04:13,  1.25s/it] 34%|███▍      | 103/300 [01:44<02:41,  1.22it/s]sample_actions_time_s=4.0706 (num_samples=8)
-run_rejection_sampling_time_s=4.0428
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 35%|███▌      | 106/300 [01:52<03:52,  1.20s/it] 37%|███▋      | 112/300 [01:52<02:25,  1.30it/s]sample_actions_time_s=4.0714 (num_samples=8)
-run_rejection_sampling_time_s=4.0566
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 39%|███▊      | 116/300 [02:00<03:22,  1.10s/it]sample_actions_time_s=4.0727 (num_samples=8)
-run_rejection_sampling_time_s=3.8066
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 40%|████      | 121/300 [02:08<03:44,  1.25s/it] 42%|████▏     | 127/300 [02:08<02:22,  1.22it/s]sample_actions_time_s=4.0745 (num_samples=8)
-run_rejection_sampling_time_s=3.7842
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 43%|████▎     | 128/300 [02:16<03:03,  1.07s/it]
-[rollout 39/40] time_s=137.92 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 129, 'Success_Rate': 1.0, 'Rzz_List': 129, 'Pos_List': 129, 'Mode': 'sample_and_rank'}
-  0%|          | 0/300 [00:00<?, ?it/s]sample_actions_time_s=4.1117 (num_samples=8)
-run_rejection_sampling_time_s=3.6282
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  0%|          | 1/300 [00:07<39:16,  7.88s/it]  3%|▎         | 8/300 [00:07<03:33,  1.37it/s]sample_actions_time_s=4.1062 (num_samples=8)
-run_rejection_sampling_time_s=3.6198
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  4%|▍         | 13/300 [00:15<05:24,  1.13s/it]sample_actions_time_s=4.0923 (num_samples=8)
-run_rejection_sampling_time_s=3.6257
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  6%|▌         | 17/300 [00:23<06:41,  1.42s/it]sample_actions_time_s=4.1010 (num_samples=8)
-run_rejection_sampling_time_s=3.6426
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
-  8%|▊         | 25/300 [00:31<05:29,  1.20s/it]sample_actions_time_s=4.0893 (num_samples=8)
-run_rejection_sampling_time_s=3.6669
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 11%|█         | 33/300 [00:39<04:56,  1.11s/it] 13%|█▎        | 40/300 [00:39<03:10,  1.36it/s]sample_actions_time_s=4.0673 (num_samples=8)
-run_rejection_sampling_time_s=3.7211
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 14%|█▍        | 43/300 [00:47<04:32,  1.06s/it]sample_actions_time_s=4.0552 (num_samples=8)
-run_rejection_sampling_time_s=3.7238
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 16%|█▋        | 49/300 [00:55<04:46,  1.14s/it] 19%|█▊        | 56/300 [00:55<03:00,  1.35it/s]sample_actions_time_s=4.0393 (num_samples=8)
-run_rejection_sampling_time_s=3.7790
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 20%|█▉        | 59/300 [01:03<04:19,  1.08s/it]sample_actions_time_s=4.0553 (num_samples=8)
-run_rejection_sampling_time_s=3.9896
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 22%|██▏       | 65/300 [01:11<04:35,  1.17s/it] 24%|██▎       | 71/300 [01:11<03:02,  1.26it/s]sample_actions_time_s=4.0559 (num_samples=8)
-run_rejection_sampling_time_s=3.9296
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 25%|██▍       | 74/300 [01:19<04:20,  1.15s/it] 27%|██▋       | 80/300 [01:19<02:45,  1.33it/s]sample_actions_time_s=4.0685 (num_samples=8)
-run_rejection_sampling_time_s=3.9393
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 28%|██▊       | 84/300 [01:27<03:51,  1.07s/it]sample_actions_time_s=4.0604 (num_samples=8)
-run_rejection_sampling_time_s=3.9412
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 30%|██▉       | 89/300 [01:35<04:21,  1.24s/it] 32%|███▏      | 95/300 [01:35<02:47,  1.23it/s]sample_actions_time_s=4.1043 (num_samples=8)
-run_rejection_sampling_time_s=3.9201
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 33%|███▎      | 98/300 [01:43<03:59,  1.19s/it] 35%|███▍      | 104/300 [01:43<02:29,  1.31it/s]sample_actions_time_s=4.0943 (num_samples=8)
-run_rejection_sampling_time_s=3.9303
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 36%|███▌      | 108/300 [01:51<03:28,  1.09s/it]sample_actions_time_s=4.1061 (num_samples=8)
-run_rejection_sampling_time_s=3.8748
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 38%|███▊      | 113/300 [02:00<03:54,  1.25s/it] 40%|████      | 120/300 [02:00<02:19,  1.29it/s]sample_actions_time_s=4.0878 (num_samples=8)
-run_rejection_sampling_time_s=3.7731
-Set the action queue! Current lenght: 0
-Lenght after action queue insertions: 8
- 41%|████      | 123/300 [02:08<03:20,  1.13s/it] 42%|████▏     | 127/300 [02:08<02:54,  1.01s/it]
-[rollout 40/40] time_s=129.23 mode=sample_and_rank video_made=True stats: {'Return': 1.0, 'Horizon': 128, 'Success_Rate': 1.0, 'Rzz_List': 128, 'Pos_List': 128, 'Mode': 'sample_and_rank'}
-Completed 40 rollouts. Outputs: stats=/scratch/gilbreth/zoellner/diffusion_rollouts/can_rollouts/n8h300r40g1bY/rollout_stats.json, videos=/scratch/gilbreth/zoellner/diffusion_rollouts/can_rollouts/n8h300r40g1bY/video, run_dir=/scratch/gilbreth/zoellner/diffusion_rollouts/can_rollouts/n8h300r40g1bY
-Finished sample-and-rank? elapsed_seconds=3075
