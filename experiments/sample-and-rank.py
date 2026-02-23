@@ -261,7 +261,7 @@ def run_diffusion(args):
 
 
 CKPT_PATH = "./models/model_epoch_1100_low_dim_v15_success_0.7.pth"  # <-- change
-OUTPUT_PATH = "./outputs/sr_rollout"
+OUTPUT_PATH = "./runs/sr_rollout"
 
 def main():
     parser = argparse.ArgumentParser()
