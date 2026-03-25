@@ -267,7 +267,7 @@ def playback_dataset(args):
         video_writer = imageio.get_writer(args.video_path, fps=20)
 
     for ind in range(len(demos)):
-        ep = demos[ind]
+        ep = demos[len(demos)-1-ind]
         print("Playing back episode: {}".format(ep))
 
         if args.use_obs:
