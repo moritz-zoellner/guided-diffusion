@@ -69,20 +69,18 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
     video_count = 0  # video frame counter
     total_reward = 0.
 
-    Rzz = []
-    Pos = []
+    Obs_List = []
 
     try:
         for step_i in tqdm(range(horizon)):
+            Obs_List.append(to_jsonable(obs))
+
             # get action from policy
             act = policy(ob=obs)
 
             # play action
             next_obs, r, done, _ = env.step(act)
 
-            rzz, pos  = get_metrics(env)
-            Rzz.append(rzz)
-            Pos.append(pos.tolist())
             # compute reward
             total_reward += r
             success = env.is_success()["task"]
@@ -112,8 +110,7 @@ def rollout(policy, env, horizon, video_writer=None, video_skip=5, camera_names=
         Return=total_reward, 
         Horizon=(step_i + 1), 
         Success_Rate=float(success),
-        Rzz_List=Rzz,
-        Pos_List=Pos
+        Obs_List=Obs_List,
     )
 
     return stats
@@ -179,7 +176,7 @@ def run_diffusion(args):
             f"[rollout {rollout_num}/{args.n_rollouts}] "
             f"time_s={rollout_seconds:.2f} "
             f"video_made={make_video} "
-            f"stats: { {key: (len(value) if key in ['Rzz_List', 'Pos_List'] and len(value) > 0 else value) for key, value in stats.items()} }"
+            f"stats: { {key: (len(value) if key in ['Obs_List'] and len(value) > 0 else value) for key, value in stats.items()} }"
         )
 
 
