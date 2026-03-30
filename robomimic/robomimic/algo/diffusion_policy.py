@@ -119,6 +119,9 @@ class DiffusionPolicyUNet(PolicyAlgo):
         self.action_check_done = False
         self.obs_queue = None
         self.action_queue = None
+        self.corrections_list = []
+        self.diffusion_list = []
+        self.guidance_list = []
     
     def process_batch_for_training(self, batch):
         """
@@ -270,7 +273,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
         self.obs_queue = obs_queue
         self.action_queue = action_queue
     
-    def get_action(self, obs_dict, goal_dict=None):
+    def get_action(self, obs_dict, goal_dict=None, guidance_function=None, guidance_type=None, guidance_scale=0.0):
         """
         Get policy action outputs.
 
@@ -301,7 +304,15 @@ class DiffusionPolicyUNet(PolicyAlgo):
             
             # run inference
             # [1,T,Da]
-            action_sequence = self._get_action_trajectory(obs_dict=obs_dict)
+            if guidance_function is not None and (guidance_type in [None, "diffusion"]):
+                action_sequence = self._get_action_trajectory_guidance(
+                    obs_dict=obs_dict,
+                    goal_dict=goal_dict,
+                    guidance_function=guidance_function,
+                    guidance_scale=guidance_scale,
+                )
+            else:
+                action_sequence = self._get_action_trajectory(obs_dict=obs_dict, goal_dict=goal_dict)
             
             # put actions into the queue
             self.action_queue.extend(action_sequence[0])
@@ -388,6 +399,9 @@ class DiffusionPolicyUNet(PolicyAlgo):
         
     def _get_action_trajectory(self, obs_dict, goal_dict=None):
         assert not self.nets.training
+        self.corrections_list = []
+        self.diffusion_list = []
+        self.guidance_list = []
         To = self.algo_config.horizon.observation_horizon
         Ta = self.algo_config.horizon.action_horizon
         Tp = self.algo_config.horizon.prediction_horizon
@@ -446,6 +460,98 @@ class DiffusionPolicyUNet(PolicyAlgo):
         start = To - 1
         end = start + Ta
         action = naction[:,start:end]
+        return action
+
+    def _get_action_trajectory_guidance(self, obs_dict, goal_dict=None, guidance_function=None, guidance_scale=0.0):
+        """
+        Diffusion sampling with optional guidance gradients injected during denoising.
+
+        guidance_function should have signature:
+            grad = guidance_function(obs_dict, actions)
+        where actions is [B, Tp, Da] and grad has the same shape.
+        """
+        assert not self.nets.training
+        if guidance_function is None:
+            return self._get_action_trajectory(obs_dict=obs_dict, goal_dict=goal_dict)
+
+        self.corrections_list = []
+        self.diffusion_list = []
+        self.guidance_list = []
+
+        To = self.algo_config.horizon.observation_horizon
+        Ta = self.algo_config.horizon.action_horizon
+        Tp = self.algo_config.horizon.prediction_horizon
+        action_dim = self.ac_dim
+        if self.algo_config.ddpm.enabled is True:
+            num_inference_timesteps = self.algo_config.ddpm.num_inference_timesteps
+        elif self.algo_config.ddim.enabled is True:
+            num_inference_timesteps = self.algo_config.ddim.num_inference_timesteps
+        else:
+            raise ValueError
+
+        nets = self.nets
+        if self.ema is not None:
+            nets = self.ema.averaged_model
+
+        inputs = {
+            "obs": obs_dict,
+            "goal": goal_dict,
+        }
+        for k in self.obs_shapes:
+            assert inputs["obs"][k].ndim - 2 == len(self.obs_shapes[k])
+        obs_features = TensorUtils.time_distributed(inputs, nets["policy"]["obs_encoder"], inputs_as_kwargs=True)
+        assert obs_features.ndim == 3
+
+        B = obs_features.shape[0]
+        obs_cond = obs_features.flatten(start_dim=1)
+
+        naction = torch.randn((B, Tp, action_dim), device=self.device)
+        self.noise_scheduler.set_timesteps(num_inference_timesteps)
+
+        for k in self.noise_scheduler.timesteps:
+            self.corrections_list.append(naction.detach().clone())
+            noise_pred = nets["policy"]["noise_pred_net"](
+                sample=naction,
+                timestep=k,
+                global_cond=obs_cond,
+            )
+
+            sigma_t = torch.sqrt(1.0 - self.noise_scheduler.alphas_cumprod[k]).to(
+                device=naction.device,
+                dtype=naction.dtype,
+            )
+            raw_diffusion_term = (sigma_t * noise_pred).detach().clone()
+            guidance_term = torch.zeros_like(naction)
+
+            if guidance_scale != 0.0:
+                with torch.enable_grad():
+                    naction_for_grad = naction.detach().requires_grad_(True)
+                    grad = guidance_function(obs_dict, naction_for_grad)
+                    if grad is None:
+                        raise RuntimeError("guidance_function returned None; expected Tensor gradient.")
+                    if grad.shape != naction_for_grad.shape:
+                        raise RuntimeError(
+                            f"guidance gradient shape mismatch: expected {naction_for_grad.shape}, got {grad.shape}"
+                        )
+                    guidance_term = (guidance_scale * sigma_t * grad).detach()
+                    noise_pred = noise_pred - guidance_term
+
+            self.diffusion_list.append(raw_diffusion_term)
+            self.guidance_list.append(guidance_term.clone())
+
+            naction = self.noise_scheduler.step(
+                model_output=noise_pred,
+                timestep=k,
+                sample=naction,
+            ).prev_sample
+
+        self.corrections_list.append(naction.detach().clone())
+        self.diffusion_list.append(torch.zeros_like(naction))
+        self.guidance_list.append(torch.zeros_like(naction))
+
+        start = To - 1
+        end = start + Ta
+        action = naction[:, start:end]
         return action
 
     def serialize(self):
