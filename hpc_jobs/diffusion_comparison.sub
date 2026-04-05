@@ -1,0 +1,40 @@
+#!/bin/sh
+#SBATCH -J diffusion_cmp
+#SBATCH -A rpaleja
+#SBATCH -p a100-40gb
+#SBATCH --cpus-per-task=8
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=32G
+#SBATCH --qos=normal
+#SBATCH -t 24:00:00
+#SBATCH -o slurm-%j.out
+
+module load conda
+conda activate guided_diffusion
+
+export MUJOCO_GL=egl
+export EGL_DEVICE_ID=0
+export CUDA_VISIBLE_DEVICES=0
+unset DISPLAY
+
+CKPT_PATH=/scratch/gilbreth/zoellner/diffusion_runs/can_mh_lowdim/20260209180642/models/model_epoch_2000.pth
+
+echo "Starting diffusion comparison via SLURM"
+cd ~/src/guided-diffusion
+RUN_NAME=$(date +%Y%m%d_%H%M%S)
+start_time=$(date +%s)
+python -u experiments/diffusion_comparison.py \
+  --ckpt_path ${CKPT_PATH} \
+  --output_path outputs/can_rollouts/comparison \
+  --run_name ${RUN_NAME} \
+  --horizon 300 \
+  --record_video y \
+  --video_skip 1 \
+  --sample_and_rank_k 8 \
+  --guidance_rollout_steps 8 \
+  --guidance_scales 25 50 75 100 \
+  --seeds 0 1 2 3 4 5 6 7 8 9
+
+end_time=$(date +%s)
+elapsed=$((end_time - start_time))
+echo "Finished diffusion comparison? elapsed_seconds=${elapsed}"
