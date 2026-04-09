@@ -225,6 +225,18 @@ def _sample_full_action_candidates(policy: Any, obs: Dict[str, Any], num_candida
 	return torch.cat(candidates, dim=0)
 
 
+def _get_snr_executable_slice(policy: Any, reinject_horizon: int) -> Tuple[int, int]:
+	To = int(policy.policy.algo_config.horizon.observation_horizon)
+	Tp = int(policy.policy.algo_config.horizon.prediction_horizon)
+	start = max(0, To - 1)
+	end = min(start + int(reinject_horizon), Tp)
+	if start >= end:
+		raise ValueError(
+			f"Invalid SNR executable slice: start={start}, end={end}, To={To}, Tp={Tp}, reinject_horizon={reinject_horizon}"
+		)
+	return start, end
+
+
 def _write_json(path: Path, payload: Any) -> None:
 	path.write_text(json.dumps(to_jsonable(payload), indent=2))
 
@@ -328,11 +340,13 @@ def _run_rollout_episode(
 
 			if method.kind == "sample_and_rank" and step_idx % method.rank_recompute_interval == 0:
 				candidate_actions = _sample_full_action_candidates(policy, obs, method.rank_k)
+				snr_start, snr_end = _get_snr_executable_slice(policy, method.rank_reinject_horizon)
+				executable_candidates = candidate_actions[:, snr_start:snr_end, :]
 				current_state = build_state_from_obs_dict(obs)
-				candidate_scores_t = score_fn(current_state, candidate_actions)
+				candidate_scores_t = score_fn(current_state, executable_candidates)
 				selected_candidate_index = int(torch.argmax(candidate_scores_t).item())
-				selected_chunk = candidate_actions[selected_candidate_index].detach().cpu()
-				policy.policy.set_full_action(selected_chunk[1 : 1 + method.rank_reinject_horizon])
+				selected_chunk = executable_candidates[selected_candidate_index].detach().cpu()
+				policy.policy.set_full_action(selected_chunk)
 				candidate_scores = candidate_scores_t.detach().cpu().numpy()
 
 			if method.kind == "base":
@@ -348,6 +362,10 @@ def _run_rollout_episode(
 				act = policy(ob=obs)
 			else:
 				raise ValueError(f"Unknown method kind: {method.kind}")
+
+			act = np.asarray(act, dtype=np.float32)
+			act = np.nan_to_num(act, nan=0.0, posinf=0.0, neginf=0.0)
+			act = np.clip(act, -1.0, 1.0)
 
 			next_obs, reward, done, _ = env.step(act)
 			next_state = build_state_from_obs_dict(next_obs)
@@ -543,7 +561,10 @@ def _rollout_single_method(
 		)
 
 	init_state = None
-	if args.fix_init_state == "y":
+	init_state_json = getattr(args, "init_state_json", None)
+	if init_state_json is not None:
+		init_state = load_init_state_json(str(init_state_json))
+	elif args.fix_init_state == "y":
 		env.reset()
 		init_state = env.get_state()
 		_write_json(run_output_path / "init_state.json", init_state)
@@ -683,6 +704,7 @@ def main_sample_and_rank() -> None:
 	parser.add_argument("--world_model_run_path", type=str, default=str(DEFAULT_WORLD_MODEL_RUN_PATH))
 	parser.add_argument("--guidance_rollout_steps", type=int, default=8)
 	parser.add_argument("--seed", type=int, default=0)
+	parser.add_argument("--init_state_json", type=str, default=None)
 	args = parser.parse_args()
 	run_sample_and_rank(args)
 
