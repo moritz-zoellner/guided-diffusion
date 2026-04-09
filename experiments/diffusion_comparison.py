@@ -180,6 +180,7 @@ def _make_world_model_scoring_helpers(
 	stats: Dict[str, np.ndarray],
 	device: str,
 	rollout_steps: int = 8,
+	objective: str = "can_rzz",
 ) -> Tuple[Any, Any]:
 	state_mean = torch.tensor(stats["state_mean"], device=device, dtype=torch.float32).unsqueeze(0)
 	state_std = torch.tensor(stats["state_std"], device=device, dtype=torch.float32).unsqueeze(0)
@@ -193,7 +194,7 @@ def _make_world_model_scoring_helpers(
 		state = state.expand(actions.shape[0], -1).contiguous()
 
 		horizon = min(int(rollout_steps), int(actions.shape[1]))
-		rzz_traj = []
+		metric_traj = []
 
 		for step_idx in range(horizon):
 			action_t = actions[:, step_idx, :]
@@ -202,10 +203,17 @@ def _make_world_model_scoring_helpers(
 			delta_n = predictor(state_n, action_n)
 			delta = delta_n * delta_std + delta_mean
 			state = state + delta
-			rzz_traj.append(_rotation_6d_to_rzz_torch(state[:, 12:18]))
+			if objective == "can_rzz":
+				metric_traj.append(_rotation_6d_to_rzz_torch(state[:, 12:18]))
+			elif objective == "min_eef_rzz":
+				metric_traj.append(_rotation_6d_to_rzz_torch(state[:, 21:27]))
+			else:
+				raise ValueError(f"Unknown guidance objective: {objective}")
 
-		rzz_stack = torch.stack(rzz_traj, dim=1)
-		return rzz_stack.mean(dim=1)
+		metric_stack = torch.stack(metric_traj, dim=1)
+		if objective == "min_eef_rzz":
+			return -metric_stack.mean(dim=1)
+		return metric_stack.mean(dim=1)
 
 	def guidance_function(states: Dict[str, Any], actions: torch.Tensor) -> torch.Tensor:
 		current_obs = _extract_current_obs_dict(states)
@@ -547,6 +555,7 @@ def _rollout_single_method(
 	score_fn = None
 	guidance_fn = None
 	if use_world_model_guidance:
+		guidance_objective = getattr(args, "guidance_objective", "can_rzz")
 		predictor, stats, _, _ = load_model_for_eval(
 			model_or_run_path=args.world_model_run_path,
 			predictor_kind="learned",
@@ -558,6 +567,7 @@ def _rollout_single_method(
 			stats=stats,
 			device=device,
 			rollout_steps=args.guidance_rollout_steps,
+			objective=guidance_objective,
 		)
 
 	init_state = None
@@ -647,9 +657,15 @@ def run_base_policy(args: argparse.Namespace) -> None:
 
 def run_sample_and_rank(args: argparse.Namespace) -> None:
 	use_world_model_guidance = True
+	guidance_objective = getattr(args, "guidance_objective", "can_rzz")
+	method_slug = f"sample_and_rank_k{args.num_samples}"
+	method_label = f"Sample-and-rank k={args.num_samples}"
+	if guidance_objective == "min_eef_rzz":
+		method_slug = f"snr_k{args.num_samples}"
+		method_label = f"SNR k={args.num_samples}"
 	method = MethodSpec(
-		slug=f"sample_and_rank_k{args.num_samples}",
-		label=f"Sample-and-rank k={args.num_samples}",
+		slug=method_slug,
+		label=method_label,
 		kind="sample_and_rank",
 		rank_k=args.num_samples,
 		rank_recompute_interval=args.Ta,
@@ -703,6 +719,12 @@ def main_sample_and_rank() -> None:
 	parser.add_argument("--ranking_mode", type=str, choices=["env", "world_model"], default="world_model")
 	parser.add_argument("--world_model_run_path", type=str, default=str(DEFAULT_WORLD_MODEL_RUN_PATH))
 	parser.add_argument("--guidance_rollout_steps", type=int, default=8)
+	parser.add_argument(
+		"--guidance_objective",
+		type=str,
+		choices=["can_rzz", "min_eef_rzz"],
+		default="can_rzz",
+	)
 	parser.add_argument("--seed", type=int, default=0)
 	parser.add_argument("--init_state_json", type=str, default=None)
 	args = parser.parse_args()
