@@ -273,7 +273,16 @@ class DiffusionPolicyUNet(PolicyAlgo):
         self.obs_queue = obs_queue
         self.action_queue = action_queue
     
-    def get_action(self, obs_dict, goal_dict=None, guidance_function=None, guidance_type=None, guidance_scale=0.0):
+    def get_action(
+        self,
+        obs_dict,
+        goal_dict=None,
+        guidance_function=None,
+        guidance_type=None,
+        guidance_scale=0.0,
+        post_guidance_steps=10,
+        post_guidance_scale=None,
+    ):
         """
         Get policy action outputs.
 
@@ -310,6 +319,17 @@ class DiffusionPolicyUNet(PolicyAlgo):
                     goal_dict=goal_dict,
                     guidance_function=guidance_function,
                     guidance_scale=guidance_scale,
+                )
+            elif guidance_function is not None and (guidance_type in ["post_sample", "after_sampling"]):
+                # Sample from diffusion first, then optimize sampled actions by gradient ascent.
+                action_sequence = self._get_action_trajectory(obs_dict=obs_dict, goal_dict=goal_dict)
+                scale = guidance_scale if post_guidance_scale is None else post_guidance_scale
+                action_sequence = self._post_sample_action_guidance(
+                    obs_dict=obs_dict,
+                    action_sequence=action_sequence,
+                    guidance_function=guidance_function,
+                    guidance_scale=scale,
+                    guidance_steps=post_guidance_steps,
                 )
             else:
                 action_sequence = self._get_action_trajectory(obs_dict=obs_dict, goal_dict=goal_dict)
@@ -553,6 +573,46 @@ class DiffusionPolicyUNet(PolicyAlgo):
         end = start + Ta
         action = naction[:, start:end]
         return action
+
+    def _post_sample_action_guidance(
+        self,
+        obs_dict,
+        action_sequence,
+        guidance_function,
+        guidance_scale=0.0,
+        guidance_steps=10,
+    ):
+        """
+        Apply gradient-ascent guidance after an action sequence has been sampled.
+
+        guidance_function should have signature:
+            grad = guidance_function(obs_dict, actions)
+        where actions and grad are both [B, T, Da].
+        """
+        if guidance_function is None:
+            return action_sequence
+
+        steps = int(guidance_steps)
+        scale = float(guidance_scale)
+        if steps <= 0 or scale == 0.0:
+            return action_sequence
+
+        guided_actions = action_sequence.detach()
+        for _ in range(steps):
+            with torch.enable_grad():
+                actions_for_grad = guided_actions.detach().requires_grad_(True)
+                grad = guidance_function(obs_dict, actions_for_grad)
+                if grad is None:
+                    raise RuntimeError("guidance_function returned None; expected Tensor gradient.")
+                if grad.shape != actions_for_grad.shape:
+                    raise RuntimeError(
+                        f"guidance gradient shape mismatch: expected {actions_for_grad.shape}, got {grad.shape}"
+                    )
+
+            with torch.no_grad():
+                guided_actions = torch.clamp(actions_for_grad + scale * grad.detach(), -1.0, 1.0)
+
+        return guided_actions.detach()
 
     def serialize(self):
         """
