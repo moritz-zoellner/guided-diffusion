@@ -57,6 +57,8 @@ class MethodSpec:
 	label: str
 	kind: str
 	guidance_scale: Optional[float] = None
+	guidance_type: str = "diffusion"
+	post_guidance_steps: Optional[int] = None
 	rank_k: int = 8
 	rank_recompute_interval: int = 8
 	rank_reinject_horizon: int = 8
@@ -265,6 +267,8 @@ def _summarize_rollout(
 		"method_label": method.label,
 		"method_kind": method.kind,
 		"guidance_scale": method.guidance_scale,
+		"guidance_type": method.guidance_type,
+		"post_guidance_steps": method.post_guidance_steps,
 		"rank_k": method.rank_k,
 		"init_dir": str(init_dir),
 		"init_name": init_dir.name,
@@ -362,12 +366,15 @@ def _run_rollout_episode(
 			if method.kind == "base":
 				act = policy(ob=obs)
 			elif method.kind == "guided":
-				act = policy(
+				guided_kwargs = dict(
 					ob=obs,
 					guidance_function=guidance_fn,
-					guidance_type="diffusion",
+					guidance_type=method.guidance_type,
 					guidance_scale=float(method.guidance_scale),
 				)
+				if method.guidance_type in ("post_sample", "after_sampling") and method.post_guidance_steps is not None:
+					guided_kwargs["post_guidance_steps"] = int(method.post_guidance_steps)
+				act = policy(**guided_kwargs)
 			elif method.kind == "sample_and_rank":
 				act = policy(ob=obs)
 			else:
@@ -430,6 +437,8 @@ def _run_rollout_episode(
 		"method_label": method.label,
 		"method_kind": method.kind,
 		"guidance_scale": method.guidance_scale,
+		"guidance_type": method.guidance_type,
+		"post_guidance_steps": method.post_guidance_steps,
 		"rank_k": method.rank_k,
 		"seed": int(seed),
 		"horizon_requested": int(horizon),
@@ -449,7 +458,12 @@ def _run_rollout_episode(
 	}
 
 
-def _build_method_specs(guidance_scales: Sequence[float], sample_and_rank_k: int) -> List[MethodSpec]:
+def _build_method_specs(
+	guidance_scales: Sequence[float],
+	sample_and_rank_k: int,
+	post_sample_guidance_scale: Optional[float] = None,
+	post_sample_guidance_steps: int = 10,
+) -> List[MethodSpec]:
 	specs = [MethodSpec(slug="dp_base", label="Base DP", kind="base")]
 	specs.append(
 		MethodSpec(
@@ -469,6 +483,18 @@ def _build_method_specs(guidance_scales: Sequence[float], sample_and_rank_k: int
 				label=f"Guidance λ={scale_label}",
 				kind="guided",
 				guidance_scale=float(scale),
+				guidance_type="diffusion",
+			)
+		)
+	if post_sample_guidance_scale is not None:
+		specs.append(
+			MethodSpec(
+				slug="post_sample_guidance",
+				label=f"Post-sample guidance λ={post_sample_guidance_scale:g}",
+				kind="guided",
+				guidance_scale=float(post_sample_guidance_scale),
+				guidance_type="post_sample",
+				post_guidance_steps=int(post_sample_guidance_steps),
 			)
 		)
 	return specs
@@ -493,7 +519,12 @@ def run_comparison(args: argparse.Namespace) -> None:
 		rollout_steps=args.guidance_rollout_steps,
 	)
 
-	method_specs = _build_method_specs(args.guidance_scales, args.sample_and_rank_k)
+	method_specs = _build_method_specs(
+		guidance_scales=args.guidance_scales,
+		sample_and_rank_k=args.sample_and_rank_k,
+		post_sample_guidance_scale=args.post_sample_guidance_scale,
+		post_sample_guidance_steps=args.post_sample_guidance_steps,
+	)
 	init_state_dirs = [Path(item) for item in args.init_state_dirs]
 	seeds = [int(seed) for seed in args.seeds]
 	init_states = {}
@@ -751,6 +782,8 @@ def _comparison_arg_parser() -> argparse.ArgumentParser:
 		type=float,
 		default=[25.0, 50.0, 75.0, 100.0],
 	)
+	parser.add_argument("--post_sample_guidance_scale", type=float, default=None)
+	parser.add_argument("--post_sample_guidance_steps", type=int, default=10)
 	parser.add_argument(
 		"--init_state_dirs",
 		nargs="+",
