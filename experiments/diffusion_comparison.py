@@ -15,14 +15,16 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-import robosuite
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUIDANCE_DIR = REPO_ROOT / "guidance"
-for _path in (REPO_ROOT, GUIDANCE_DIR):
+ROBOSUITE_DIR = REPO_ROOT / "robosuite"
+ROBOMIMIC_DIR = REPO_ROOT / "robomimic"
+for _path in (REPO_ROOT, GUIDANCE_DIR, ROBOSUITE_DIR, ROBOMIMIC_DIR):
 	if str(_path) not in sys.path:
 		sys.path.insert(0, str(_path))
+
+import robosuite
 
 from robomimic.utils import file_utils as FileUtils
 from robomimic.utils import obs_utils as ObsUtils
