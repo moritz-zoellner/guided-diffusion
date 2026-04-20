@@ -18,10 +18,18 @@ export EGL_DEVICE_ID=0
 export CUDA_VISIBLE_DEVICES=0
 unset DISPLAY
 
+# ============================================================================
+# CONFIG SELECTION: Uncomment ONE of the following to choose which config to use
+# ============================================================================
+#CONFIG_NAME=diffusion_policy.json           # Original CAN config
+CONFIG_NAME=diffusion_policy_toy_squares.json  # Toy Squares (TouchCube) DP config
+# ============================================================================
+
 echo "Starting diffusion policy training via SLURM"
-cd ~/src/guided-diffusion
+echo "Using config: $CONFIG_NAME"
+cd /home/mzoellner/Projects/research/guided-diffusion
 start_time=$(date +%s)
-python robomimic/robomimic/scripts/train.py --config configs/diffusion_policy.json --name can_mh_lowdim --resume 
+python robomimic/robomimic/scripts/train.py --config configs/$CONFIG_NAME --name can_mh_lowdim --resume 
 end_time=$(date +%s)
 elapsed=$((end_time - start_time))
 echo "Finished training? elapsed_seconds=${elapsed}"

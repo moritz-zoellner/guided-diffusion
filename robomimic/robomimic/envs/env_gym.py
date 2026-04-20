@@ -89,7 +89,13 @@ class EnvGym(EB.EnvBase):
         Returns:
             observation (dict): observation dictionary after setting the simulator state
         """
-        if hasattr(self.env.unwrapped.sim, "set_state_from_flattened"):
+        if hasattr(self.env.unwrapped, "reset_to"):
+            obs = self.env.unwrapped.reset_to(state)
+            self._current_obs = obs
+            self._current_reward = None
+            self._current_done = None
+            return self.get_observation(obs)
+        if hasattr(self.env.unwrapped, "sim") and hasattr(self.env.unwrapped.sim, "set_state_from_flattened"):
             self.env.unwrapped.sim.set_state_from_flattened(state["states"])
             self.env.unwrapped.sim.forward()
             return { "flat" : self.env.unwrapped._get_obs() }
@@ -123,12 +129,16 @@ class EnvGym(EB.EnvBase):
         if obs is None:
             assert self._current_obs is not None
             obs = self._current_obs
+        if isinstance(obs, dict):
+            return {k: np.copy(v) for k, v in obs.items()}
         return { "flat" : np.copy(obs) }
 
     def get_state(self):
         """
         Get current environment simulator state as a dictionary. Should be compatible with @reset_to.
         """
+        if hasattr(self.env.unwrapped, "get_state"):
+            return self.env.unwrapped.get_state()
         # NOTE: assumes MuJoCo gym task!
         xml = self.env.sim.model.get_xml() # model xml file
         state = np.array(self.env.sim.get_state().flatten()) # simulator state
