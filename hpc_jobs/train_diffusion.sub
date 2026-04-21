@@ -27,9 +27,10 @@ CONFIG_NAME=diffusion_policy_toy_squares.json  # Toy Squares (TouchCube) DP conf
 
 echo "Starting diffusion policy training via SLURM"
 echo "Using config: $CONFIG_NAME"
-cd /home/mzoellner/Projects/research/guided-diffusion
+cd /home/zoellner/src/guided-diffusion
 start_time=$(date +%s)
-python robomimic/robomimic/scripts/train.py --config configs/$CONFIG_NAME --name can_mh_lowdim --resume 
+#python robomimic/robomimic/scripts/train.py --config configs/$CONFIG_NAME --name can_mh_lowdim --resume 
+python robomimic/robomimic/scripts/train.py --config configs/$CONFIG_NAME
 end_time=$(date +%s)
 elapsed=$((end_time - start_time))
 echo "Finished training? elapsed_seconds=${elapsed}"

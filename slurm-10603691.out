@@ -1,12 +1,20 @@
+Starting diffusion policy training via SLURM
+Using config: diffusion_policy_toy_squares.json
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+
+============= New Training Run with Config =============
 {
     "algo_name": "diffusion_policy",
     "experiment": {
-        "name": "toy_squares_dp",
+        "name": "can_mh_lowdim",
         "validate": true,
         "logging": {
             "terminal_output_to_txt": true,
             "log_tb": true,
-            "log_wandb": true,
+            "log_wandb": false,
             "wandb_proj_name": "guided_diffusion"
         },
         "save": {
@@ -33,11 +41,14 @@
             "rate": 10,
             "warmstart": 0,
             "terminate_on_success": true
-        }
+        },
+        "env_meta_update_dict": {},
+        "ckpt_path": null
     },
     "train": {
         "data": "data/toy_squares/train/data.hdf5",
-        "output_dir":"runs/toy_squares/",
+        "output_dir": "runs/toy_squares/",
+        "normalize_weights_by_ds_size": false,
         "num_data_workers": 0,
         "hdf5_cache_mode": "low_dim",
         "hdf5_use_swmr": true,
@@ -52,18 +63,32 @@
         "dataset_keys": [
             "actions"
         ],
+        "action_keys": [
+            "actions"
+        ],
+        "action_config": {
+            "actions": {
+                "normalization": null
+            }
+        },
         "goal_mode": null,
         "cuda": true,
         "batch_size": 16,
         "num_epochs": 2000,
-        "seed": 1
+        "seed": 1,
+        "max_grad_norm": null
     },
     "algo": {
         "optim_params": {
             "policy": {
+                "optimizer_type": "adamw",
                 "learning_rate": {
                     "initial": 0.0001,
                     "decay_factor": 0.1,
+                    "step_every_batch": true,
+                    "scheduler_type": "cosine",
+                    "num_cycles": 0.5,
+                    "warmup_steps": 500,
                     "epoch_schedule": []
                 },
                 "regularization": {
@@ -79,7 +104,11 @@
         "unet": {
             "enabled": true,
             "diffusion_step_embed_dim": 256,
-            "down_dims": [256,512,1024],
+            "down_dims": [
+                256,
+                512,
+                1024
+            ],
             "kernel_size": 5,
             "n_groups": 8
         },
@@ -171,5 +200,24 @@
                 "obs_randomizer_kwargs": {}
             }
         }
+    },
+    "meta": {
+        "hp_base_config_file": null,
+        "hp_keys": [],
+        "hp_values": []
     }
 }
+
+run failed with error:
+Resuming training run, but output dir /home/zoellner/src/guided-diffusion/robomimic/robomimic/runs/toy_squares/can_mh_lowdim does not exist
+
+Traceback (most recent call last):
+  File "/home/zoellner/src/guided-diffusion/robomimic/robomimic/scripts/train.py", line 504, in main
+    train(config, device=device, resume=args.resume)
+  File "/home/zoellner/src/guided-diffusion/robomimic/robomimic/scripts/train.py", line 59, in train
+    log_dir, ckpt_dir, video_dir, time_dir = TrainUtils.get_exp_dir(config, resume=resume)
+  File "/home/zoellner/src/guided-diffusion/robomimic/robomimic/utils/train_utils.py", line 62, in get_exp_dir
+    assert os.path.exists(base_output_dir), "Resuming training run, but output dir {} does not exist".format(base_output_dir)
+AssertionError: Resuming training run, but output dir /home/zoellner/src/guided-diffusion/robomimic/robomimic/runs/toy_squares/can_mh_lowdim does not exist
+
+Finished training? elapsed_seconds=7
