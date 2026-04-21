@@ -18,7 +18,15 @@ if __name__ == "__main__":
     macros_private_path = os.path.join(base_path, "macros_private.py")
 
     if not os.path.exists(macros_path):
+        print("{} does not exist! Trying with local install paths...".format(macros_path))
+
+    base_path = robomimic.__path__[0] + "/robomimic"
+    macros_path = os.path.join(base_path, "macros.py")
+    macros_private_path = os.path.join(base_path, "macros_private.py")
+
+    if not os.path.exists(macros_path):
         print("{} does not exist! Aborting...".format(macros_path))
+        exit()
 
     if os.path.exists(macros_private_path):
         ans = input("{} already exists! \noverwrite? (y/n)\n".format(macros_private_path))
