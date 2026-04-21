@@ -226,9 +226,15 @@ def create_env_from_metadata(
     if env_name is None:
         env_name = env_meta["env_name"]
     env_type = get_env_type(env_meta=env_meta)
-    env_kwargs = env_meta["env_kwargs"]
+    env_kwargs = deepcopy(env_meta["env_kwargs"])
     env_kwargs["env_name"] = env_name
     lang = env_meta.get("lang", None)
+
+    # Avoid duplicate lang passing if serialized env_kwargs also contains it.
+    if "lang" in env_kwargs:
+        if lang is None:
+            lang = env_kwargs["lang"]
+        env_kwargs.pop("lang", None)
 
     env = create_env(
         env_type=env_type,

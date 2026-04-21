@@ -360,9 +360,9 @@ def process_obs_dict(obs_dict):
 
 def process_frame(frame, channel_dim, scale):
     """
-    Given frame fetched from dataset, process for network input. Converts array
-    to float (from uint8), normalizes pixels from range [0, @scale] to [0, 1], and channel swaps
-    from (H, W, C) to (C, H, W).
+    Given frame fetched from dataset or environment, process for network input.
+    Supports either (H, W, C) or (C, H, W) channel layouts (with optional leading
+    batch dimensions), converts to float, and normalizes to [0, 1].
 
     Args:
         frame (np.array or torch.Tensor): frame array
@@ -372,15 +372,28 @@ def process_frame(frame, channel_dim, scale):
     Returns:
         processed_frame (np.array or torch.Tensor): processed frame
     """
-    # Channel size should either be 3 (RGB) or 1 (depth)
-    assert (frame.shape[-1] == channel_dim)
     frame = TU.to_float(frame)
-    if scale is not None:
-        frame = frame / scale
-        frame = frame.clip(0.0, 1.0)
-    frame = batch_image_hwc_to_chw(frame)
 
-    return frame
+    # Case 1: HWC (or ...HWC) input from datasets / standard env outputs.
+    if frame.shape[-1] == channel_dim:
+        if scale is not None:
+            frame = frame / scale
+        frame = frame.clip(0.0, 1.0)
+        return batch_image_hwc_to_chw(frame)
+
+    # Case 2: CHW (or ...CHW) input from envs that already return channel-first.
+    if frame.shape[-3] == channel_dim:
+        # Normalize only if values look like [0, scale] data.
+        if scale is not None and np.max(TU.to_numpy(frame)) > 1.0:
+            frame = frame / scale
+        frame = frame.clip(0.0, 1.0)
+        return frame
+
+    raise AssertionError(
+        "process_frame expected input with channel dimension {} in last or third-last axis, got shape {}".format(
+            channel_dim, tuple(frame.shape)
+        )
+    )
 
 
 def unprocess_obs(obs, obs_modality=None, obs_key=None):

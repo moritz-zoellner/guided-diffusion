@@ -10,7 +10,7 @@ PYTHON_BIN=${PYTHON_BIN:-/home/zoellner/.conda/envs/guided_diffusion/bin/python}
 REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
 
 TRAIN_OUT=${TRAIN_OUT:-$REPO_ROOT/data/toy_squares/train}
-TRAIN_ROLLOUTS=${TRAIN_ROLLOUTS:-10}
+TRAIN_ROLLOUTS=${TRAIN_ROLLOUTS:-10000}
 HORIZON=${HORIZON:-150}
 
 mkdir -p "$TRAIN_OUT"
