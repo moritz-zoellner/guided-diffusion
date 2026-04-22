@@ -27,7 +27,7 @@ def get_demo_keys(path):
     return sorted(keys, key=lambda x: int(re.search(r'\d+', x).group()))
 
 
-def collect_trajectories(path1, path2, path3, machine_percent=0.5, min_machine_percent=0.05):
+def collect_trajectories(path, machine_percent=0.5, min_machine_percent=0.05):
     """
     path1, path2: human / expert datasets
     path3: machine-generated / mixed dataset
@@ -67,7 +67,51 @@ def collect_trajectories(path1, path2, path3, machine_percent=0.5, min_machine_p
 #                loading demos and building trajectory dataset                #
 ###############################################################################
 
-def build_trajectory_dataset(selected_demos):
+def build_state_traj(obs_group, state_components=[]):
+    """
+    Builds verified 29D state trajectory from robomimic obs group.
+
+    State layout:
+      [ p_can_to_eef(3),
+        q_can_to_eef_6d(6),
+        p_can(3),
+        q_can_6d(6),
+        p_eef(3),
+        q_eef_6d(6),
+        g_pos(2?) ]
+
+    For CanLift this should sum to 29.
+    """
+    # Relative can->eef
+    # p_can_to_eef = obs_group["object"][:, 0:3]
+    # q_can_to_eef = quat_to_6d(xyzw_to_wxyz_batch(obs_group["object"][:, 3:7]))
+
+    # # Absolute can
+    # p_can = obs_group["object"][:, 7:10]
+    # q_can = quat_to_6d(xyzw_to_wxyz_batch(obs_group["object"][:, 10:14]))
+
+    # # Absolute eef
+    # p_eef = obs_group["robot0_eef_pos"][:]
+    # q_eef = quat_to_6d(xyzw_to_wxyz_batch(obs_group["robot0_eef_quat"][:]))
+
+    # # Gripper
+    # g_pos = obs_group["robot0_gripper_qpos"][:]
+
+    # s_traj = np.concatenate(
+    #     [p_can_to_eef, q_can_to_eef, p_can, q_can, p_eef, q_eef, g_pos],
+    #     axis=-1,
+    # )
+
+    components = []
+    for f in state_components:
+        components.append(f(obs_group))
+
+    s_traj = np.concatenate(components, axis=-1)
+
+    return s_traj.astype(np.float32)
+
+
+def build_trajectory_dataset(selected_demos, state_components=[]):
     """
     Main dataset structure for training stages.
 
@@ -89,8 +133,8 @@ def build_trajectory_dataset(selected_demos):
             next_obs = f[f"data/{d_id}/next_obs"]
             acts = f[f"data/{d_id}/actions"][:].astype(np.float32)
 
-            s_traj = build_state_traj(obs)   # shape (T, state_dim)
-            s_next_traj = build_state_traj(next_obs)
+            s_traj = build_state_traj(obs, state_components=state_components)   # shape (T, state_dim)
+            s_next_traj = build_state_traj(next_obs, state_components=state_components)
             delta_traj = (s_next_traj - s_traj).astype(np.float32)
 
             # In robomimic low-dim data, obs, next_obs, actions are aligned by index t.

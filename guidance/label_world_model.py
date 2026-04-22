@@ -13,19 +13,25 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+from torch._higher_order_ops import scan
 from tqdm import tqdm
 
-from robomimic.utils import file_utils as FileUtils
-from robomimic.utils import obs_utils as ObsUtils
-from robomimic.utils import env_utils as EnvUtils
-
-from robomimic.envs.env_base import EnvBase
-from robomimic.algo import RolloutPolicy
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
 from scipy.stats import spearmanr
 
+import corallab_stl.torch as stl
+from corallab_stl.automata import get_spot_formula_and_aps
+
+from .utils.data import (
+    get_demo_keys,
+    collect_trajectories,
+    build_trajectory_dataset,
+    split_trajectories,
+    compute_normalization_stats,
+    DynamicsTransitionDataset,
+)
 from .world_model_utils import (
     DynamicsMLP,
     quat_to_6d,
@@ -40,28 +46,81 @@ from .world_model_utils import (
     rzz_from_state_29d,
 )
 
-import corallab_stl.torch as stl
-from corallab_stl.automata import get_spot_formula_and_aps
 
+
+
+def add_labels(trajectories, predicates):
+
+    def labeling_func(s):
+        return torch.stack([p({"state": s}) >= 0.0 for p in predicates], axis=-1)
+
+    def overwrite_with_next_label(c, x):
+        previous, carry = c
+
+        def write_carry():
+            return (x.clone(), carry.clone()), carry.clone()
+
+        def update_carry():
+            return (x.clone(), previous.clone()), previous.clone()
+
+        # if x == previous
+        return torch.cond((x == previous).all(),
+                          # overwrite x with next label (carry)
+                          write_carry,
+                          # update carry to be previous
+                          # overwrite x with next label (carry)
+                          update_carry)
+
+    for traj in trajectories:
+        states = torch.tensor(traj["states"])
+        next_states = torch.tensor(traj["next_states"])
+
+        labels = labeling_func(states)
+        immediate_next_labels = labeling_func(next_states)
+        _, next_labels = scan(overwrite_with_next_label, (immediate_next_labels[-2], immediate_next_labels[-1]), labels, reverse=True)
+
+        traj["labels"] = labels.float()
+        traj["next_labels"] = next_labels.float()
+
+    return trajectories
+    
 
 def main():
-    x_var = stl.Var("x", dim=1)
-    y_var = stl.Var("y", dim=1)
+    dataset_path = "/home/shared/data/toy_squares/train/data.hdf5"
+    demos = [(dataset_path, k) for k in get_demo_keys(dataset_path)]
+    trajectories = build_trajectory_dataset(demos, state_components=[
+        lambda s: s["agent_pos"][:],
+        lambda s: s["states"][:], # blue, red, green, yellow
+    ])
 
-    pos_x = stl.Predicate(x_var, lambda x, _: x[0], 0.0)
-    pos_y = stl.Predicate(y_var, lambda y, _: y[0], 0.0)
+    # labels ##################################################################
 
-    # phi = stl.UntimedAlways(stl.And(pos_x, pos_y))
-    phi = stl.UntimedAlways(pos_x)
+    state_var = stl.Var("state", dim=10,
+                        agent_pos=(0, 2),
+                        blue_pos=(2, 4),
+                        red_pos=(4, 6),
+                        green_pos=(6, 8),
+                        yellow_pos=(8, 10))
 
-    x = torch.linspace(2, -2, 64).unsqueeze(-1)
-    y = torch.linspace(0, 4, 64).unsqueeze(-1)
+    cube_radius = 0.2
+    at_blue = stl.Predicate(state_var, lambda state, _: cube_radius - (state[0:2] - state[2:4]).norm(), 0.0)
+    at_red = stl.Predicate(state_var, lambda state, _: cube_radius - (state[0:2] - state[4:6]).norm(), 0.0)
+    at_green = stl.Predicate(state_var, lambda state, _: cube_radius - (state[0:2] - state[6:8]).norm(), 0.0)
+    at_yellow = stl.Predicate(state_var, lambda state, _: cube_radius - (state[0:2] - state[8:10]).norm(), 0.0)
 
-    rho = phi({ "x": x, "y": y })
+    trajectories = add_labels(trajectories, [at_green, at_blue, at_red, at_yellow])
 
-    spot_form, aps, spot_aps = get_spot_formula_and_aps(phi)
+    train_trajectories, val_trajectories = split_trajectories(
+        trajectories,
+        val_ratio=0.2,
+        seed=42,
+    )
 
-    breakpoint()
+    # IMPORTANT: normalize using train split only
+    stats = compute_normalization_stats(train_trajectories)
+
+    # train_dataset = DynamicsTransitionDataset(train_trajectories, stats)
+    # val_dataset = DynamicsTransitionDataset(val_trajectories, stats)
 
 
 if __name__ == "__main__":
