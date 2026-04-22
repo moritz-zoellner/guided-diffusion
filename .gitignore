@@ -3,7 +3,8 @@ __pycache__/
 wandb/
 data/
 logs/
-outputs/
+/outputs/
 runs/
-models/
+/models/
+/robosuite/robosuite/models/
 videos/

@@ -1,0 +1,15 @@
+{
+  "checkpoint": "/scratch/gilbreth/zoellner/diffusion_runs/toy_squares_dp/20260421005349/models/model_epoch_2000.pth",
+  "early_decision": {
+    "n_rollouts": 100,
+    "success_rate": 0.3,
+    "avg_steps": 163.58,
+    "avg_return": 0.3
+  },
+  "late_decision": {
+    "n_rollouts": 100,
+    "success_rate": 1.0,
+    "avg_steps": 92.58,
+    "avg_return": 1.0
+  }
+}
