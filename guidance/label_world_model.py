@@ -173,7 +173,7 @@ def main():
 
     # Instantiate model
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = DynamicsMLP(state_dim=29, action_dim=7, hidden_dim=256)
+    model = DynamicsMLP(state_dim=10, action_dim=2, hidden_dim=256)
     model = model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
@@ -188,7 +188,6 @@ def main():
 
     with mlflow.start_run() as run:
 
-        # checkpoint_path = os.path.join(run_dir, "best_model.pt")
         norm_stats_path = None
         provenance_path = None
 
@@ -251,97 +250,96 @@ def main():
         print(f"Normalization stats saved to {norm_stats_path}")
         print(f"Data provenance saved to {provenance_path}")
 
-        # %%
         # Training loop
 
-        # train_losses = []
-        # val_losses = []
-        # best_epoch = -1
+        train_losses = []
+        val_losses = []
+        best_epoch = -1
 
-        # for epoch in range(num_epochs):
-        #     # ===== Train epoch =====
-        #     model.train()
-        #     train_loss_sum = 0.0
-        #     train_batches = 0
+        for epoch in range(num_epochs):
 
-        #     for batch in train_loader:
-        #         s_t = batch["s_t"].to(device)
-        #         a_t = batch["a_t"].to(device)
-        #         delta_t = batch["delta_t"].to(device)
+            # ===== Train epoch =====
+            model.train()
+            train_loss_sum = 0.0
+            train_batches = 0
 
-        #         optimizer.zero_grad()
-        #         delta_t_pred = model(s_t, a_t)
-        #         loss = loss_fn(delta_t_pred, delta_t)
-        #         loss.backward()
-        #         optimizer.step()
+            for batch in train_loader:
+                s_t = batch["states"].to(device)
+                a_t = batch["actions"].to(device)
+                delta_t = batch["deltas"].to(device)
 
-        #         train_loss_sum += loss.item()
-        #         train_batches += 1
+                optimizer.zero_grad()
+                delta_t_pred = model(s_t, a_t)
+                loss = loss_fn(delta_t_pred, delta_t)
+                loss.backward()
+                optimizer.step()
 
-        #     train_loss = train_loss_sum / max(1, train_batches)
-        #     train_losses.append(train_loss)
+                train_loss_sum += loss.item()
+                train_batches += 1
 
-        #     # ===== Val epoch =====
-        #     model.eval()
-        #     val_loss_sum = 0.0
-        #     val_batches = 0
+            train_loss = train_loss_sum / max(1, train_batches)
+            train_losses.append(train_loss)
 
-        #     with torch.no_grad():
-        #         for batch in val_loader:
-        #             s_t = batch["s_t"].to(device)
-        #             a_t = batch["a_t"].to(device)
-        #             delta_t = batch["delta_t"].to(device)
+            # ===== Val epoch =====
+            model.eval()
+            val_loss_sum = 0.0
+            val_batches = 0
 
-        #             delta_t_pred = model(s_t, a_t)
-        #             loss = loss_fn(delta_t_pred, delta_t)
+            with torch.no_grad():
+                for batch in val_loader:
+                    s_t = batch["states"].to(device)
+                    a_t = batch["actions"].to(device)
+                    delta_t = batch["deltas"].to(device)
 
-        #             val_loss_sum += loss.item()
-        #             val_batches += 1
+                    delta_t_pred = model(s_t, a_t)
+                    loss = loss_fn(delta_t_pred, delta_t)
 
-        #     val_loss = val_loss_sum / max(1, val_batches)
-        #     val_losses.append(val_loss)
+                    val_loss_sum += loss.item()
+                    val_batches += 1
 
-        #     # ===== Checkpoint best model =====
-        #     if val_loss < best_val_loss:
-        #         best_val_loss = val_loss
-        #         best_epoch = epoch
-        #         epochs_since_improvement = 0
-        #         torch.save(
-        #             {
-        #                 "epoch": epoch,
-        #                 "model_state_dict": model.state_dict(),
-        #                 "optimizer_state_dict": optimizer.state_dict(),
-        #                 "train_loss": train_loss,
-        #                 "val_loss": val_loss,
-        #                 "model_config": {
-        #                     "state_dim": 29,
-        #                     "action_dim": 7,
-        #                     "hidden_dim": 256,
-        #                     "activation": "SiLU",
-        #                 },
-        #                 "normalization_stats": {
-        #                     "state_mean": stats["state_mean"],
-        #                     "state_std": stats["state_std"],
-        #                     "action_mean": stats["action_mean"],
-        #                     "action_std": stats["action_std"],
-        #                     "delta_mean": stats["delta_mean"],
-        #                     "delta_std": stats["delta_std"],
-        #                 },
-        #             },
-        #             checkpoint_path,
-        #         )
-        #         print(f"Epoch {epoch+1:3d} | train loss: {train_loss:.6f} | val loss: {val_loss:.6f} | BEST")
-        #     else:
-        #         epochs_since_improvement += 1
-        #         print(f"Epoch {epoch+1:3d} | train loss: {train_loss:.6f} | val loss: {val_loss:.6f}")
+            val_loss = val_loss_sum / max(1, val_batches)
+            val_losses.append(val_loss)
 
-        #     # Early stopping
-        #     if epochs_since_improvement >= patience:
-        #         print(f"\nEarly stopping at epoch {epoch+1}. No improvement for {patience} epochs.")
-        #         break
+            # ===== Checkpoint best model =====
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_epoch = epoch
+                epochs_since_improvement = 0
 
-        # print(f"\nTraining complete. Best val loss: {best_val_loss:.6f} (epoch {best_epoch + 1})")
-        # print(f"Checkpoint saved to {checkpoint_path}")
+                with run_artifact_path(run, "best_model.pt") as path:
+                    torch.save(
+                        {
+                            "epoch": epoch,
+                            "model_state_dict": model.state_dict(),
+                            "optimizer_state_dict": optimizer.state_dict(),
+                            "train_loss": train_loss,
+                            "val_loss": val_loss,
+                            "model_config": {
+                                "state_dim": 29,
+                                "action_dim": 7,
+                                "hidden_dim": 256,
+                                "activation": "SiLU",
+                            },
+                            "normalization_stats": stats,
+                        },
+                        path,
+                    )
+                print(f"Epoch {epoch+1:3d} | train loss: {train_loss:.6f} | val loss: {val_loss:.6f} | BEST")
+            else:
+                epochs_since_improvement += 1
+                print(f"Epoch {epoch+1:3d} | train loss: {train_loss:.6f} | val loss: {val_loss:.6f}")
+
+            mlflow.log_metrics({
+                "train loss": train_loss,
+                "val loss": val_loss
+            }, epoch)
+                
+            # Early stopping
+            if epochs_since_improvement >= patience:
+                print(f"\nEarly stopping at epoch {epoch+1}. No improvement for {patience} epochs.")
+                break
+
+        print(f"\nTraining complete. Best val loss: {best_val_loss:.6f} (epoch {best_epoch + 1})")
 
 
 if __name__ == "__main__":
