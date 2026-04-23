@@ -116,11 +116,13 @@ def main():
         seed=42,
     )
 
-    # IMPORTANT: normalize using train split only
-    stats = compute_normalization_stats(train_trajectories)
+    keys = ["states", "actions", "next_states", "deltas", "labels", "next_labels"]
 
-    # train_dataset = DynamicsTransitionDataset(train_trajectories, stats)
-    # val_dataset = DynamicsTransitionDataset(val_trajectories, stats)
+    # IMPORTANT: normalize using train split only
+    stats = compute_normalization_stats(train_trajectories, keys=keys)
+    train_dataset = DynamicsTransitionDataset(train_trajectories, stats, keys=keys, normalization_blacklist=["labels", "next_labels"])
+    val_dataset = DynamicsTransitionDataset(val_trajectories, stats, keys=keys, normalization_blacklist=["labels", "next_labels"])
+
 
 
 if __name__ == "__main__":

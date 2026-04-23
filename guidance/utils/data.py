@@ -7,6 +7,7 @@ import torch.nn as nn
 import imageio
 import json
 import re
+from functools import reduce
 
 import h5py
 import numpy as np
@@ -199,53 +200,52 @@ def split_trajectories(trajectories, val_ratio=0.2, seed=42):
     return train_traj, val_traj
 
 
-def flatten_trajectory_dataset(trajectories):
+def flatten_trajectory_dataset(trajectories, keys=[]):
     """
     Useful for normalization stats and one-step supervised training.
 
     Returns concatenated arrays over trajectory dimension.
     """
-    S = np.concatenate([tr["states"] for tr in trajectories], axis=0)
-    A = np.concatenate([tr["actions"] for tr in trajectories], axis=0)
-    S_next = np.concatenate([tr["next_states"] for tr in trajectories], axis=0)
-    D = np.concatenate([tr["deltas"] for tr in trajectories], axis=0)
+    flat_selected_data = {
+        k: np.concatenate([tr[k] for tr in trajectories], axis=0)
+        for k in keys
+    }
 
-    print("Flat Dataset Summary:")
-    print(f" - S:      {S.shape}")
-    print(f" - A:      {A.shape}")
-    print(f" - S_next: {S_next.shape}")
-    print(f" - D:      {D.shape}")
+    # print("Flat Dataset Summary:")
+    # print(f" - S:      {S.shape}")
+    # print(f" - A:      {A.shape}")
+    # print(f" - S_next: {S_next.shape}")
+    # print(f" - D:      {D.shape}")
 
-    return (
-        S.astype(np.float32),
-        A.astype(np.float32),
-        S_next.astype(np.float32),
-        D.astype(np.float32),
-    )
+    # return (
+    #     S.astype(np.float32),
+    #     A.astype(np.float32),
+    #     S_next.astype(np.float32),
+    #     D.astype(np.float32),
+    # )
+
+    return flat_selected_data
 
 
 ###############################################################################
 #                                normalization                                #
 ###############################################################################
 
-def compute_normalization_stats(trajectories):
+def compute_normalization_stats(trajectories, keys=[]):
     """
     Computes global mean/std over transitions for a given trajectory split.
 
     For Option B training, delta stats are the target normalization stats.
     """
-    S, A, S_next, D = flatten_trajectory_dataset(trajectories)
+    flat_selected_data = flatten_trajectory_dataset(trajectories, keys=keys)
 
-    stats = {
-        "state_mean": S.mean(axis=0),
-        "state_std": S.std(axis=0) + 1e-8,
-        "action_mean": A.mean(axis=0),
-        "action_std": A.std(axis=0) + 1e-8,
-        "next_state_mean": S_next.mean(axis=0),
-        "next_state_std": S_next.std(axis=0) + 1e-8,
-        "delta_mean": D.mean(axis=0),
-        "delta_std": D.std(axis=0) + 1e-8,
-    }
+    stats_list = [{
+        f"{k}_mean": v.mean(axis=0),
+        f"{k}_std": v.std(axis=0) + 1e-8
+    } for k, v in flat_selected_data.items()]
+
+    stats = reduce(lambda x, y: x | y, stats_list)
+
     return stats
 
 
@@ -255,24 +255,28 @@ class DynamicsTransitionDataset(Dataset):
 
     __getitem__ returns normalized (s_t, a_t, delta_t).
     """
-    def __init__(self, trajectories, stats):
-        self.S, self.A, self.S_next, self.D = flatten_trajectory_dataset(trajectories)
+    def __init__(self, trajectories, stats, keys=[], normalization_blacklist=[]):
+        self.keys = keys
+        self.normalization_blacklist = normalization_blacklist
+        self.flat_data = flatten_trajectory_dataset(trajectories, keys=keys)
         self.stats = stats
 
     def __len__(self):
-        return self.S.shape[0]
+        return self.flat_data["states"].shape[0]
 
     def __getitem__(self, idx):
-        s_t = self.S[idx]
-        a_t = self.A[idx]
-        d_t = self.D[idx]
-
-        s_t_n = (s_t - self.stats["state_mean"]) / self.stats["state_std"]
-        a_t_n = (a_t - self.stats["action_mean"]) / self.stats["action_std"]
-        d_t_n = (d_t - self.stats["delta_mean"]) / self.stats["delta_std"]
-
-        return {
-            "s_t": torch.from_numpy(s_t_n).float(),
-            "a_t": torch.from_numpy(a_t_n).float(),
-            "delta_t": torch.from_numpy(d_t_n).float(),
+        unnorm_data = {
+            k: self.flat_data[k][idx] for k in self.keys
         }
+
+        def normalize(k, x):
+            if k not in self.normalization_blacklist:
+                return (x - self.stats[f"{k}_mean"]) / self.stats[f"{k}_std"]
+            else:
+                return x
+
+        norm_data = {
+            k: torch.from_numpy(normalize(k, v)).float() for k, v in unnorm_data.items()
+        }
+
+        return norm_data
