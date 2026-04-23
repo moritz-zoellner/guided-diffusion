@@ -13,11 +13,16 @@ PYTHONNOUSERSITE = "1"
 [dependencies]
 python = ">=3.10,<3.11"
 spot = ">=2.14.5,<3"
+ipykernel = ">=7.2.0,<8"
+ipywidgets = ">=8.1.8,<9"
+setuptools = "<82"
+pip = ">=26.0.1,<27"
+wandb = ">=0.26.0,<0.27"
 
 [pypi-dependencies]
 h5py = ">=3.16.0, <4"
 torch = ">=2.11.0, <3"
-robomimic = { path = "/home/tassos/phd/research/14-stl-diffusion-policy/guided-diffusion/robomimic", editable = true }
+robomimic = { path = "/home/moritz/src/guided-diffusion/robomimic", editable = true }
 scipy = ">=1.15.3, <2"
 huggingface-hub = "==0.23.4"
 diffusers = ">=0.11.1, <0.12"

@@ -1,7 +1,7 @@
 {
     "algo_name": "diffusion_policy",
     "experiment": {
-        "name": "toy_squares_dp",
+        "name": "toy_squares_dp_n500",
         "validate": true,
         "logging": {
             "terminal_output_to_txt": true,
@@ -12,13 +12,13 @@
         "save": {
             "enabled": true,
             "every_n_seconds": null,
-            "every_n_epochs": 20,
+            "every_n_epochs": 100,
             "epochs": [],
-            "on_best_validation": false,
-            "on_best_rollout_return": false,
+            "on_best_validation": true,
+            "on_best_rollout_return": true,
             "on_best_rollout_success_rate": true
         },
-        "epoch_every_n_steps": 5,
+        "epoch_every_n_steps": 500,
         "validation_epoch_every_n_steps": 10,
         "env": null,
         "additional_envs": null,
@@ -30,14 +30,14 @@
             "enabled": true,
             "n": 10,
             "horizon": 150,
-            "rate": 2,
+            "rate": 10,
             "warmstart": 0,
             "terminate_on_success": true
         }
     },
     "train": {
-        "data": "/home/zoellner/src/guided-diffusion/data/toy_squares/train/data.hdf5",
-        "output_dir":"/scratch/gilbreth/zoellner/diffusion_runs/",
+        "data": "/home/moritz/src/guided-diffusion/data/toy_squares/train/data.hdf5",
+        "output_dir":"/home/moritz/data/diffusion_runs/",
         "num_data_workers": 0,
         "hdf5_cache_mode": "low_dim",
         "hdf5_use_swmr": true,
@@ -110,8 +110,7 @@
         "modalities": {
             "obs": {
                 "low_dim": [
-                    "agent_pos",
-                    "states"
+                    "agent_pos"
                 ],
                 "rgb": [
                     "image"

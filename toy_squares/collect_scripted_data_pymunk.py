@@ -493,6 +493,7 @@ def run_trained_agent(args):
 
     rollout_stats = []
     i = 0
+    pbar = tqdm(total=rollout_num_episodes, desc="Rollouts", unit="episode")
 
     REPEAT_ENVIRONMENT = args.repeat_environment # if you want uniform coverage 
 
@@ -501,65 +502,69 @@ def run_trained_agent(args):
     obs = env.reset()
     current_state = env.get_state() 
 
-    while i < rollout_num_episodes:
-        print(f"On {i} out of {rollout_num_episodes}")
-        key = i % 4
-        try:
-            stats, traj = rollout(
-                policy=policy, 
-                env=env, 
-                horizon=rollout_horizon, 
-                render=args.render, 
-                video_writer=video_writer, 
-                video_skip=args.video_skip, 
-                return_obs=(write_dataset and args.dataset_obs),
-                camera_names=args.camera_names,
-                real=is_real_robot,
-                rate_measure=rate_measure,
-                key = key,
-                reset_to = current_state if REPEAT_ENVIRONMENT else None 
-            )
-        except KeyboardInterrupt:
-            sys.exit(0)
-        
-        rollout_stats.append(stats)
+    try:
+        while i < rollout_num_episodes:
+            key = i % 4
+            try:
+                stats, traj = rollout(
+                    policy=policy, 
+                    env=env, 
+                    horizon=rollout_horizon, 
+                    render=args.render, 
+                    video_writer=video_writer, 
+                    video_skip=args.video_skip, 
+                    return_obs=(write_dataset and args.dataset_obs),
+                    camera_names=args.camera_names,
+                    real=is_real_robot,
+                    rate_measure=rate_measure,
+                    key=key,
+                    reset_to=current_state if REPEAT_ENVIRONMENT else None 
+                )
+            except KeyboardInterrupt:
+                sys.exit(0)
+            
+            rollout_stats.append(stats)
 
-        if args.keep_only_successful and stats["Success_Rate"] < 1:
-            print("Failed run, not saved")
-            try_count += 1 
-            if try_count > MAX_TRIES: # sometimes you can't reach a cube in the environment even with one waypoint 
-                env.reset() 
+            if args.keep_only_successful and stats["Success_Rate"] < 1:
+                # print("Failed run, not saved")
+                try_count += 1 
+                if try_count > MAX_TRIES: # sometimes you can't reach a cube in the environment even with one waypoint 
+                    env.reset() 
+                    current_state = env.get_state() 
+                    # print("\t\tFAILED TOO MANY TIMES, TRYING ANOTHER ENVIRONMENT")
+                continue
+            else:
+                # we are going to save 
+                try_count = 0 
+
+            if write_dataset:
+                # store transitions
+                ep_data_grp = data_grp.create_group("demo_{}".format(i))
+                ep_data_grp.create_dataset("actions", data=np.array(traj["actions"]))
+                ep_data_grp.create_dataset("states", data=np.array(traj["states"]))
+                ep_data_grp.create_dataset("rewards", data=np.array(traj["rewards"]))
+                ep_data_grp.create_dataset("dones", data=np.array(traj["dones"]))
+                ep_data_grp.create_dataset("label", data=np.array(traj["label"]))
+                if args.dataset_obs:
+                    for k in traj["obs"]:
+                        ep_data_grp.create_dataset("obs/{}".format(k), data=np.array(traj["obs"][k]))
+                        ep_data_grp.create_dataset("next_obs/{}".format(k), data=np.array(traj["next_obs"][k]))
+
+                # episode metadata
+                if "model" in traj["initial_state_dict"]:
+                    ep_data_grp.attrs["model_file"] = traj["initial_state_dict"]["model"] # model xml for this episode
+                ep_data_grp.attrs["num_samples"] = traj["actions"].shape[0] # number of transitions in this episode
+                total_samples += traj["actions"].shape[0]
+
+            i += 1 
+            pbar.update(1)
+            pbar.set_postfix(saved=i)
+            # if we've made it this far, we're successful 
+            if i % 4 == 0: # touch every cube 
+                obs = env.reset()
                 current_state = env.get_state() 
-                print("\t\tFAILED TOO MANY TIMES, TRYING ANOTHER ENVIRONMENT")
-            continue
-        else:
-            # we are going to save 
-            try_count = 0 
-
-        if write_dataset:
-            # store transitions
-            ep_data_grp = data_grp.create_group("demo_{}".format(i))
-            ep_data_grp.create_dataset("actions", data=np.array(traj["actions"]))
-            ep_data_grp.create_dataset("states", data=np.array(traj["states"]))
-            ep_data_grp.create_dataset("rewards", data=np.array(traj["rewards"]))
-            ep_data_grp.create_dataset("dones", data=np.array(traj["dones"]))
-            ep_data_grp.create_dataset("label", data=np.array(traj["label"]))
-            if args.dataset_obs:
-                for k in traj["obs"]:
-                    ep_data_grp.create_dataset("obs/{}".format(k), data=np.array(traj["obs"][k]))
-                    ep_data_grp.create_dataset("next_obs/{}".format(k), data=np.array(traj["next_obs"][k]))
-
-            # episode metadata
-            if "model" in traj["initial_state_dict"]:
-                ep_data_grp.attrs["model_file"] = traj["initial_state_dict"]["model"] # model xml for this episode
-            ep_data_grp.attrs["num_samples"] = traj["actions"].shape[0] # number of transitions in this episode
-            total_samples += traj["actions"].shape[0]
-
-        i += 1 
-        # if we've made it this far, we're successful 
-        if i % 4 == 0: # touch every cube 
-            obs = env.reset()
-            current_state = env.get_state() 
+    finally:
+        pbar.close()
 
     rollout_stats = TensorUtils.list_of_flat_dict_to_dict_of_list(rollout_stats)
     avg_rollout_stats = { k : np.mean(rollout_stats[k]) for k in rollout_stats }

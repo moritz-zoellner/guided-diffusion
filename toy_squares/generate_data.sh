@@ -6,10 +6,17 @@ set -euo pipefail
 # REPO_ROOT=${REPO_ROOT:-/home/mzoellner/Projects/research/guided-diffusion}
 
 # GILBRETH
-PYTHON_BIN=${PYTHON_BIN:-/home/zoellner/.conda/envs/guided_diffusion/bin/python}
-REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
+#PYTHON_BIN=${PYTHON_BIN:-/home/zoellner/.conda/envs/guided_diffusion/bin/python}
+#REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
+#TRAIN_OUT=${TRAIN_OUT:-$REPO_ROOT/data/toy_squares/train}
 
+# CORALLAB
+PYTHON_BIN=${PYTHON_BIN:-/home/moritz/src/guided-diffusion/.pixi/envs/default/bin/python}
+REPO_ROOT=${REPO_ROOT:-/home/moritz/src/guided-diffusion}
+#TRAIN_OUT=${TRAIN_OUT:-/home/shared/data/toy_squares/train}
 TRAIN_OUT=${TRAIN_OUT:-$REPO_ROOT/data/toy_squares/train}
+
+
 TRAIN_ROLLOUTS=${TRAIN_ROLLOUTS:-10000}
 HORIZON=${HORIZON:-150}
 
