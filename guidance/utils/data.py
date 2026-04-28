@@ -28,7 +28,7 @@ def get_demo_keys(path):
     return sorted(keys, key=lambda x: int(re.search(r'\d+', x).group()))
 
 
-def collect_trajectories(path, machine_percent=0.5, min_machine_percent=0.05):
+def collect_trajectories(path1, path2, path3, machine_percent=0.5, min_machine_percent=0.05):
     """
     path1, path2: human / expert datasets
     path3: machine-generated / mixed dataset
