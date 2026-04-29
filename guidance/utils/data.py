@@ -200,29 +200,45 @@ def split_trajectories(trajectories, val_ratio=0.2, seed=42):
     return train_traj, val_traj
 
 
-def flatten_trajectory_dataset(trajectories, keys=[]):
+def flatten_trajectory_dataset(trajectories, keys=[], action_horizon=1, action_key="actions"):
     """
-    Useful for normalization stats and one-step supervised training.
+    Useful for normalization stats and one-step or horizon-based supervised training.
 
-    Returns concatenated arrays over trajectory dimension.
+    When action_horizon <= 1, this keeps the original one-step behavior.
+    When action_horizon > 1, non-action keys are trimmed to align with the
+    available future action chunks, and the action key is replaced with the
+    next `action_horizon` actions flattened to shape [N, action_horizon * action_dim].
     """
-    flat_selected_data = {
-        k: np.concatenate([tr[k] for tr in trajectories], axis=0)
-        for k in keys
-    }
+    if action_horizon <= 1:
+        return {
+            k: np.concatenate([tr[k] for tr in trajectories], axis=0)
+            for k in keys
+        }
 
-    # print("Flat Dataset Summary:")
-    # print(f" - S:      {S.shape}")
-    # print(f" - A:      {A.shape}")
-    # print(f" - S_next: {S_next.shape}")
-    # print(f" - D:      {D.shape}")
+    flat_selected_data = {}
+    for k in keys:
+        if k == action_key:
+            action_chunks = []
+            for tr in trajectories:
+                actions = tr[k]
+                n_chunks = actions.shape[0] - action_horizon
+                if n_chunks <= 0:
+                    continue
+                chunk = np.stack(
+                    [actions[t : t + action_horizon] for t in range(n_chunks)],
+                    axis=0,
+                )
+                action_chunks.append(chunk.reshape(chunk.shape[0], -1))
 
-    # return (
-    #     S.astype(np.float32),
-    #     A.astype(np.float32),
-    #     S_next.astype(np.float32),
-    #     D.astype(np.float32),
-    # )
+            if action_chunks:
+                flat_selected_data[k] = np.concatenate(action_chunks, axis=0)
+            else:
+                flat_selected_data[k] = np.empty(
+                    (0, action_horizon * trajectories[0][k].shape[-1]),
+                    dtype=trajectories[0][k].dtype,
+                )
+        else:
+            flat_selected_data[k] = np.concatenate([tr[k][:-action_horizon] for tr in trajectories], axis=0)
 
     return flat_selected_data
 
@@ -231,13 +247,13 @@ def flatten_trajectory_dataset(trajectories, keys=[]):
 #                                normalization                                #
 ###############################################################################
 
-def compute_normalization_stats(trajectories, keys=[]):
+def compute_normalization_stats(trajectories, keys=[], flatten_fn=flatten_trajectory_dataset):
     """
     Computes global mean/std over transitions for a given trajectory split.
 
     For Option B training, delta stats are the target normalization stats.
     """
-    flat_selected_data = flatten_trajectory_dataset(trajectories, keys=keys)
+    flat_selected_data = flatten_fn(trajectories, keys=keys)
 
     stats_list = [{
         f"{k}_mean": v.mean(axis=0),
@@ -255,10 +271,10 @@ class DynamicsTransitionDataset(Dataset):
 
     __getitem__ returns normalized (s_t, a_t, delta_t).
     """
-    def __init__(self, trajectories, stats, keys=[], normalization_blacklist=[]):
+    def __init__(self, trajectories, stats, keys=[], normalization_blacklist=[], flatten_fn=flatten_trajectory_dataset):
         self.keys = keys
         self.normalization_blacklist = normalization_blacklist
-        self.flat_data = flatten_trajectory_dataset(trajectories, keys=keys)
+        self.flat_data = flatten_fn(trajectories, keys=keys)
         self.stats = stats
 
     def __len__(self):
