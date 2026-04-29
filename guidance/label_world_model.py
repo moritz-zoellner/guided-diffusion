@@ -52,6 +52,12 @@ from .world_model_utils import (
 )
 
 
+STATE_BLOCK_NAMES = ["blue", "red", "green", "yellow"]
+LABEL_NAMES = ["at_green", "at_blue", "at_red", "at_yellow"]
+LABEL_TO_STATE_BLOCK_IDX = [2, 0, 1, 3]
+STATE_BLOCK_TO_LABEL_IDX = [1, 2, 0, 3]
+
+
 ###############################################################################
 #                                     data                                    #
 ###############################################################################

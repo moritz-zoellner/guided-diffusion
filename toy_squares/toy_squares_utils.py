@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from matplotlib.collections import LineCollection
+from matplotlib.lines import Line2D
 from matplotlib.patches import RegularPolygon
 
 
@@ -310,7 +311,22 @@ def _match_blocks_to_canonical(blocks, canonical_blocks):
     return blocks[list(best_perm)]
 
 
-def _plot_rollouts(ax, rollouts, setup_fn, title):
+def _rollout_color(idx, n_rollouts, cmap_name="tab10"):
+    cmap = plt.get_cmap(cmap_name)
+    if cmap_name in {"tab10", "tab20"}:
+        return cmap(idx % cmap.N)
+    denom = max(1, n_rollouts - 1)
+    return cmap(idx / denom)
+
+
+def _fade_to_white(color, amount):
+    rgba = np.asarray(color, dtype=float)
+    rgb = rgba[:3] * amount + (1.0 - amount)
+    alpha = rgba[3] if rgba.shape[0] > 3 else 1.0
+    return (*rgb, alpha)
+
+
+def _plot_rollouts(ax, rollouts, setup_fn, title, rollout_color_mode="time", rollout_cmap="tab10", rollout_time_gradient=True):
     palette = ["#0a84ff", "#ff3b30", "#34c759", "#ffd60a"]
     canonical_agent_raw, canonical_blocks_raw = _canonical_layout(setup_fn)
     canonical_agent = _flip_y(canonical_agent_raw)
@@ -318,7 +334,9 @@ def _plot_rollouts(ax, rollouts, setup_fn, title):
     canonical_angles = np.zeros(4)
 
     has_rollout_labels = False
-    for rollout in rollouts:
+    legend_handles = []
+    rollouts = list(rollouts)
+    for rollout_idx, rollout in enumerate(rollouts):
         run_dir = _resolve_rollout_dir(rollout)
         states, agent_pos = _load_rollout_trace(run_dir)
         rollout_label = None
@@ -327,6 +345,7 @@ def _plot_rollouts(ax, rollouts, setup_fn, title):
                 rollout_label = rollout["plot_label"]
             elif "guidance_scale" in rollout:
                 rollout_label = f"lambda={float(rollout['guidance_scale']):g}"
+        base_color = _rollout_color(rollout_idx, len(rollouts), cmap_name=rollout_cmap)
 
         setup_blocks_raw, setup_angles_raw = _load_setup_layout(run_dir)
 
@@ -343,16 +362,32 @@ def _plot_rollouts(ax, rollouts, setup_fn, title):
 
         if len(trajectory) > 1:
             segments = _trajectory_segments(trajectory)
-            line = LineCollection(
-                segments,
-                cmap="plasma",
-                norm=plt.Normalize(0.0, 1.0),
-                linewidths=1.4,
-                alpha=0.68,
-                zorder=2,
-                label=rollout_label,
-            )
-            line.set_array(np.linspace(0.0, 1.0, len(segments)))
+            if rollout_color_mode == "rollout":
+                if rollout_time_gradient:
+                    amounts = np.linspace(0.45, 1.0, len(segments))
+                    colors = [_fade_to_white(base_color, amount) for amount in amounts]
+                else:
+                    colors = [base_color] * len(segments)
+                line = LineCollection(
+                    segments,
+                    colors=colors,
+                    linewidths=1.8,
+                    alpha=0.9,
+                    zorder=2,
+                )
+                if rollout_label is not None:
+                    legend_handles.append(Line2D([0], [0], color=base_color, lw=2.0, label=rollout_label))
+            else:
+                line = LineCollection(
+                    segments,
+                    cmap="plasma",
+                    norm=plt.Normalize(0.0, 1.0),
+                    linewidths=1.4,
+                    alpha=0.68,
+                    zorder=2,
+                    label=rollout_label,
+                )
+                line.set_array(np.linspace(0.0, 1.0, len(segments)))
             ax.add_collection(line)
             has_rollout_labels = has_rollout_labels or rollout_label is not None
 
@@ -399,7 +434,9 @@ def _plot_rollouts(ax, rollouts, setup_fn, title):
     ax.axis("off")
     frame = plt.Rectangle((0, 0), 1, 1, transform=ax.transAxes, fill=False, edgecolor="#9a9a9a", linewidth=2.2, zorder=10)
     ax.add_patch(frame)
-    if has_rollout_labels:
+    if rollout_color_mode == "rollout" and legend_handles:
+        ax.legend(handles=legend_handles, loc="upper right", fontsize=6, frameon=True, framealpha=0.72, handlelength=1.8)
+    elif has_rollout_labels:
         ax.legend(loc="upper right", fontsize=6, frameon=True, framealpha=0.72, handlelength=1.2)
 
 
@@ -413,6 +450,9 @@ def plot_early_late_rollouts_overlay(
     late_title="Late Decision",
     figsize=(4.5, 3.8),
     dpi=170,
+    rollout_color_mode="time",
+    rollout_cmap="tab10",
+    rollout_time_gradient=True,
 ):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -421,8 +461,24 @@ def plot_early_late_rollouts_overlay(
     comparison_path = output_dir / f"trajectory_overlay_{timestamp}.png"
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, dpi=dpi, constrained_layout=True)
-    _plot_rollouts(ax1, early_rollouts, early_setup_fn, early_title)
-    _plot_rollouts(ax2, late_rollouts, late_setup_fn, late_title)
+    _plot_rollouts(
+        ax1,
+        early_rollouts,
+        early_setup_fn,
+        early_title,
+        rollout_color_mode=rollout_color_mode,
+        rollout_cmap=rollout_cmap,
+        rollout_time_gradient=rollout_time_gradient,
+    )
+    _plot_rollouts(
+        ax2,
+        late_rollouts,
+        late_setup_fn,
+        late_title,
+        rollout_color_mode=rollout_color_mode,
+        rollout_cmap=rollout_cmap,
+        rollout_time_gradient=rollout_time_gradient,
+    )
     fig.savefig(comparison_path, bbox_inches="tight")
 
     return fig, comparison_path
