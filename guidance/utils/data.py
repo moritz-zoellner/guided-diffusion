@@ -238,7 +238,10 @@ def flatten_trajectory_dataset(trajectories, keys=[], action_horizon=1, action_k
                     dtype=trajectories[0][k].dtype,
                 )
         else:
-            flat_selected_data[k] = np.concatenate([tr[k][:-action_horizon] for tr in trajectories], axis=0)
+            if k == "next_labels":
+                flat_selected_data[k] = np.concatenate([tr[k][action_horizon:] for tr in trajectories], axis=0)
+            else:
+                flat_selected_data[k] = np.concatenate([tr[k][:-action_horizon] for tr in trajectories], axis=0)
 
     return flat_selected_data
 
