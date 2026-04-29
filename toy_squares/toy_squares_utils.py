@@ -317,9 +317,16 @@ def _plot_rollouts(ax, rollouts, setup_fn, title):
     canonical_blocks = _flip_y(canonical_blocks_raw)
     canonical_angles = np.zeros(4)
 
+    has_rollout_labels = False
     for rollout in rollouts:
         run_dir = _resolve_rollout_dir(rollout)
         states, agent_pos = _load_rollout_trace(run_dir)
+        rollout_label = None
+        if isinstance(rollout, dict):
+            if "plot_label" in rollout:
+                rollout_label = rollout["plot_label"]
+            elif "guidance_scale" in rollout:
+                rollout_label = f"lambda={float(rollout['guidance_scale']):g}"
 
         setup_blocks_raw, setup_angles_raw = _load_setup_layout(run_dir)
 
@@ -343,9 +350,11 @@ def _plot_rollouts(ax, rollouts, setup_fn, title):
                 linewidths=1.4,
                 alpha=0.68,
                 zorder=2,
+                label=rollout_label,
             )
             line.set_array(np.linspace(0.0, 1.0, len(segments)))
             ax.add_collection(line)
+            has_rollout_labels = has_rollout_labels or rollout_label is not None
 
         _draw_blocks(ax, start_blocks, start_angles, palette, radius=0.11, alpha=0.2, zorder=3)
         ax.scatter(
@@ -390,6 +399,8 @@ def _plot_rollouts(ax, rollouts, setup_fn, title):
     ax.axis("off")
     frame = plt.Rectangle((0, 0), 1, 1, transform=ax.transAxes, fill=False, edgecolor="#9a9a9a", linewidth=2.2, zorder=10)
     ax.add_patch(frame)
+    if has_rollout_labels:
+        ax.legend(loc="upper right", fontsize=6, frameon=True, framealpha=0.72, handlelength=1.2)
 
 
 def plot_early_late_rollouts_overlay(
