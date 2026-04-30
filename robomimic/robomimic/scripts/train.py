@@ -473,6 +473,9 @@ def main(args):
     if args.name is not None:
         config.experiment.name = args.name
 
+    if args.output is not None:
+        config.train.output_dir = args.output
+
     # get torch device
     device = TorchUtils.get_torch_device(try_to_use_cuda=config.train.cuda)
 
@@ -486,6 +489,7 @@ def main(args):
         config.experiment.epoch_every_n_steps = 3
         config.experiment.validation_epoch_every_n_steps = 3
         config.train.num_epochs = 2
+        config.train.num_data_workers = 0
 
         # if rollouts are enabled, try 2 rollouts at end of each epoch, with 10 environment steps
         config.experiment.rollout.rate = 1
@@ -540,6 +544,14 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="(optional) if provided, override the dataset path defined in the config",
+    )
+
+    # Output path, to override the one in the config
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="(optional) if provided, override the output folder path defined in the config",
     )
 
     # debug mode

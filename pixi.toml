@@ -22,11 +22,11 @@ wandb = ">=0.26.0,<0.27"
 [pypi-dependencies]
 h5py = ">=3.16.0, <4"
 torch = ">=2.11.0, <3"
-robomimic = { path = "/home/moritz/src/guided-diffusion/robomimic", editable = true }
+robomimic = { path = "./robomimic", editable = true }
 scipy = ">=1.15.3, <2"
 huggingface-hub = "==0.23.4"
 diffusers = ">=0.11.1, <0.12"
-corallab-stl = { path = "/home/tassos/phd/research/corallab-stl", editable = true }
+#corallab-stl = { path = "/home/tassos/phd/research/corallab-stl", editable = true }
 jupytext = ">=1.19.1, <2"
 gym = ">=0.26.2, <0.27"
 pygame = ">=2.6.1, <3"

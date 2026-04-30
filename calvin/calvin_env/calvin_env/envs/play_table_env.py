@@ -10,15 +10,17 @@ import time
 
 import cv2
 import gym
+from gym import spaces
 import gym.utils
 import gym.utils.seeding
 import hydra
 import numpy as np
+from omegaconf import OmegaConf
 import pybullet as p
 import pybullet_utils.bullet_client as bc
 
 import calvin_env
-from calvin_env.utils.utils import FpsController, get_git_commit_hash
+from calvin_env.utils.utils import FpsController
 
 # A logger for this file
 log = logging.getLogger(__name__)
@@ -41,6 +43,17 @@ class PlayTableSimEnv(gym.Env):
         use_egl,
         control_freq=30,
     ):
+        if "tactile" in cameras:
+            del cameras["tactile"]
+        self.observation_space = spaces.Box(-1000, 1000, dtype=np.float32)
+        self.action_space = spaces.Box(-1, 1, shape=(7,), dtype=np.float32)
+        if isinstance(robot_cfg, dict):
+            robot_cfg = OmegaConf.create(robot_cfg)
+        if isinstance(cameras, dict):
+            cameras = OmegaConf.create(cameras)
+        if isinstance(scene_cfg, dict):
+            scene_cfg = OmegaConf.create(scene_cfg)
+
         self.p = p
         # for calculation of FPS
         self.t = time.time()
@@ -72,7 +85,7 @@ class PlayTableSimEnv(gym.Env):
             )
             for name in cameras
         ]
-        log.info(f"Using calvin_env with commit {get_git_commit_hash(Path(calvin_env.__file__))}.")
+        log.info("Using calvin_env.")
 
     def __del__(self):
         self.close()
@@ -144,13 +157,14 @@ class PlayTableSimEnv(gym.Env):
             if self.cid >= 0 and self.p is not None:
                 try:
                     self.p.disconnect(physicsClientId=self.cid)
-                except TypeError:
+                except Exception:
                     pass
+                self.cid = -1
 
         else:
             print("does not own physics client id")
 
-    def render(self, mode="human"):
+    def render(self, mode="human", height=None, width=None):
         """render is gym compatibility function"""
         rgb_obs, depth_obs = self.get_camera_obs()
         if mode == "human":
@@ -194,9 +208,21 @@ class PlayTableSimEnv(gym.Env):
     def get_obs(self):
         """Collect camera, robot and scene observations."""
         rgb_obs, depth_obs = self.get_camera_obs()
-        obs = {"rgb_obs": rgb_obs, "depth_obs": depth_obs}
-        obs.update(self.get_state_obs())
+        state_obs = self.get_state_obs()
+        obs = {
+            "eye_in_hand": np.transpose(rgb_obs["rgb_gripper"].astype(np.float32) / 255.0, (2, 0, 1)),
+            "third_person": np.transpose(rgb_obs["rgb_static"].astype(np.float32) / 255.0, (2, 0, 1)),
+            "proprio": state_obs["robot_obs"],
+            "states": state_obs["scene_obs"],
+        }
         return obs
+
+    def get_state(self):
+        state_obs = self.get_state_obs()
+        return {
+            "robot": state_obs["robot_obs"],
+            "scene": state_obs["scene_obs"],
+        }
 
     def get_state_obs(self):
         """
@@ -236,6 +262,7 @@ class PlayTableSimEnv(gym.Env):
             self.fps_controller.step()
         # for RL call step simulation repeat
         else:
+            action[-1] = -1 if action[-1] < 0 else 1
             self.robot.apply_action(action)
             for i in range(self.action_repeat):
                 self.p.stepSimulation(physicsClientId=self.cid)

@@ -1,19 +1,30 @@
 import os
-from transformers import AutoModel, pipeline, AutoTokenizer, CLIPTextModelWithProjection
+from transformers import AutoTokenizer, CLIPTextModelWithProjection
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true" # needed to suppress warning about potential deadlock
-tokenizer = "openai/clip-vit-large-patch14" #"openai/clip-vit-base-patch32"
-lang_emb_model = CLIPTextModelWithProjection.from_pretrained(
-    tokenizer,
-    cache_dir=os.path.expanduser(os.path.join(os.environ.get("HF_HOME", "~/tmp"), "clip"))
-).eval()
-tz = AutoTokenizer.from_pretrained(tokenizer, TOKENIZERS_PARALLELISM=True)
 
 LANG_EMB_OBS_KEY = "lang_emb"
+TOKENIZER_NAME = "openai/clip-vit-large-patch14" #"openai/clip-vit-base-patch32"
+lang_emb_model = None
+tz = None
+
+
+def _load_language_model():
+    global lang_emb_model, tz
+    if lang_emb_model is None or tz is None:
+        cache_dir = os.path.expanduser(os.path.join(os.environ.get("HF_HOME", "~/tmp"), "clip"))
+        lang_emb_model = CLIPTextModelWithProjection.from_pretrained(
+            TOKENIZER_NAME,
+            cache_dir=cache_dir,
+        ).eval()
+        tz = AutoTokenizer.from_pretrained(TOKENIZER_NAME, TOKENIZERS_PARALLELISM=True)
+
 
 def get_lang_emb(lang):
     if lang is None:
         return None
+
+    _load_language_model()
     
     tokens = tz(
         text=lang,                   # the sentence to be encoded

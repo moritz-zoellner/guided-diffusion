@@ -45,6 +45,7 @@ class EnvGym(EB.EnvBase):
         self._current_reward = None
         self._current_done = None
         self._done = None
+        kwargs.pop("lang", None)
         self.env = gym.make(env_name, **kwargs)
 
     def step(self, action):
