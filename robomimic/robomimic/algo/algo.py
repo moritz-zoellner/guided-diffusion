@@ -511,6 +511,24 @@ class RolloutPolicy(object):
         self.obs_normalization_stats = obs_normalization_stats
         self.action_normalization_stats = action_normalization_stats
 
+    def _debug_action_vector(self, name, action, max_items=8):
+        if not getattr(self.policy, "debug_guidance_actions", False):
+            return
+        if torch.is_tensor(action):
+            arr = action.detach().cpu().numpy()
+        else:
+            arr = np.asarray(action)
+        stats_arr = np.asarray(arr, dtype=np.float32)
+        flat = stats_arr.reshape(-1)
+        preview = ", ".join(f"{float(v):.4f}" for v in flat[:max_items])
+        print(
+            "[DP action debug] "
+            f"{name}: shape={tuple(stats_arr.shape)} "
+            f"min={float(stats_arr.min()):.4f} max={float(stats_arr.max()):.4f} "
+            f"mean={float(stats_arr.mean()):.4f} std={float(stats_arr.std()):.4f} "
+            f"first=[{preview}]"
+        )
+
     def start_episode(self):
         """
         Prepare the policy to start a new rollout.
@@ -571,6 +589,10 @@ class RolloutPolicy(object):
         if not batched_ob:
             ac = ac[0]
         ac = TensorUtils.to_numpy(ac)
+        self._debug_action_vector(
+            "RolloutPolicy action before action_normalization_stats unnormalize (policy normalized action space)",
+            ac,
+        )
         if self.action_normalization_stats is not None:
             action_keys = self.policy.global_config.train.action_keys
             action_shapes = {k: self.action_normalization_stats[k]["offset"].shape[1:] for k in self.action_normalization_stats}
@@ -590,4 +612,13 @@ class RolloutPolicy(object):
                         raise ValueError
                     ac_dict[key] = rot
             ac = PyUtils.action_dict_to_vector(ac_dict, action_keys=action_keys)
+            self._debug_action_vector(
+                "RolloutPolicy action after action_normalization_stats unnormalize (env/raw action space)",
+                ac,
+            )
+        else:
+            self._debug_action_vector(
+                "RolloutPolicy returned action (no action_normalization_stats; same action space as policy output)",
+                ac,
+            )
         return ac

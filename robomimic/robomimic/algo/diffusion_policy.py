@@ -50,6 +50,32 @@ def algo_config_to_class(algo_config):
 
 
 class DiffusionPolicyUNet(PolicyAlgo):
+    def _debug_action_tensor(self, name, tensor, max_items=8):
+        if not getattr(self, "debug_guidance_actions", False):
+            return
+        with torch.no_grad():
+            x = tensor.detach()
+            stats = {
+                "min": float(x.min().cpu()),
+                "max": float(x.max().cpu()),
+                "mean": float(x.mean().cpu()),
+                "std": float(x.std(unbiased=False).cpu()),
+            }
+            if x.ndim == 0:
+                preview_tensor = x.reshape(1)
+            elif x.ndim == 1:
+                preview_tensor = x
+            else:
+                preview_tensor = x.reshape(-1, x.shape[-1])[0]
+            preview = ", ".join(f"{float(v):.4f}" for v in preview_tensor[:max_items].cpu())
+            print(
+                "[DP action debug] "
+                f"{name}: shape={tuple(x.shape)} "
+                f"min={stats['min']:.4f} max={stats['max']:.4f} "
+                f"mean={stats['mean']:.4f} std={stats['std']:.4f} "
+                f"first=[{preview}]"
+            )
+
     def _create_networks(self):
         """
         Creates networks and places them into @self.nets.
@@ -333,6 +359,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
                 )
             else:
                 action_sequence = self._get_action_trajectory(obs_dict=obs_dict, goal_dict=goal_dict)
+
+            self._debug_action_tensor(
+                "get_action action_sequence before queue (policy normalized action space)",
+                action_sequence,
+            )
             
             # put actions into the queue
             self.action_queue.extend(action_sequence[0])
@@ -340,6 +371,10 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # has action, execute from left to right
         # [Da]
         action = self.action_queue.popleft()
+        self._debug_action_tensor(
+            "get_action popped action before RolloutPolicy unnormalize (policy normalized action space)",
+            action,
+        )
         
         # [1,Da]
         action = action.unsqueeze(0)
@@ -480,6 +515,10 @@ class DiffusionPolicyUNet(PolicyAlgo):
         start = To - 1
         end = start + Ta
         action = naction[:,start:end]
+        self._debug_action_tensor(
+            "_get_action_trajectory returned chunk (policy normalized action space)",
+            action,
+        )
         return action
 
     def _get_action_trajectory_guidance(self, obs_dict, goal_dict=None, guidance_function=None, guidance_scale=0.0):
@@ -527,8 +566,14 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
         naction = torch.randn((B, Tp, action_dim), device=self.device)
         self.noise_scheduler.set_timesteps(num_inference_timesteps)
+        timesteps = list(self.noise_scheduler.timesteps)
+        self._debug_action_tensor(
+            "_get_action_trajectory_guidance initial naction (policy normalized action space)",
+            naction,
+        )
 
-        for k in self.noise_scheduler.timesteps:
+        for step_i, k in enumerate(timesteps):
+            k_int = int(k.detach().cpu().item()) if torch.is_tensor(k) else int(k)
             self.corrections_list.append(naction.detach().clone())
             noise_pred = nets["policy"]["noise_pred_net"](
                 sample=naction,
@@ -546,6 +591,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
             if guidance_scale != 0.0:
                 with torch.enable_grad():
                     naction_for_grad = naction.detach().requires_grad_(True)
+                    if step_i == 0 or step_i == len(timesteps) - 1:
+                        self._debug_action_tensor(
+                            f"guidance step {step_i} timestep={k_int} actions passed to guidance_function (policy normalized action space)",
+                            naction_for_grad,
+                        )
                     grad = guidance_function(obs_dict, naction_for_grad)
                     if grad is None:
                         raise RuntimeError("guidance_function returned None; expected Tensor gradient.")
@@ -553,7 +603,17 @@ class DiffusionPolicyUNet(PolicyAlgo):
                         raise RuntimeError(
                             f"guidance gradient shape mismatch: expected {naction_for_grad.shape}, got {grad.shape}"
                         )
+                    if step_i == 0 or step_i == len(timesteps) - 1:
+                        self._debug_action_tensor(
+                            f"guidance step {step_i} timestep={k_int} gradient returned by guidance_function",
+                            grad,
+                        )
                     guidance_term = (guidance_scale * sigma_t * grad).detach()
+                    if step_i == 0 or step_i == len(timesteps) - 1:
+                        self._debug_action_tensor(
+                            f"guidance step {step_i} timestep={k_int} guidance_term subtracted from noise_pred",
+                            guidance_term,
+                        )
                     noise_pred = noise_pred - guidance_term
 
             self.diffusion_list.append(raw_diffusion_term)
@@ -572,6 +632,10 @@ class DiffusionPolicyUNet(PolicyAlgo):
         start = To - 1
         end = start + Ta
         action = naction[:, start:end]
+        self._debug_action_tensor(
+            "_get_action_trajectory_guidance returned chunk (policy normalized action space)",
+            action,
+        )
         return action
 
     def _post_sample_action_guidance(
