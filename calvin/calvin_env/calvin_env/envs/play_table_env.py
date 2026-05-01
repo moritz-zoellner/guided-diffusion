@@ -190,6 +190,11 @@ class PlayTableSimEnv(gym.Env):
         self.p.stepSimulation(physicsClientId=self.cid)
         return self.get_obs()
 
+    def reset_to(self, state):
+        if isinstance(state, dict):
+            return self.reset(robot_obs=state.get("robot"), scene_obs=state.get("scene", state.get("states")))
+        return self.reset(scene_obs=state)
+
     def seed(self, seed=None):
         self.np_random, seed = gym.utils.seeding.np_random(seed)
         # self.robot.np_random = self.np_random  # use the same np_randomizer for robot as for env
