@@ -2,8 +2,27 @@
   "dataset_path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
   "output_root": "outputs/calvin/base_tests",
   "fps": 30,
-  "render_height": 200,
-  "render_width": 200,
+  "video": {
+    "perspective": "freiburg_style",
+    "width": 640,
+    "height": 480,
+    "fov": 55,
+    "nearval": 0.01,
+    "farval": 10.0,
+    "look_from": [1.2, -0.9, 1],
+    "look_at": [-0.1, -0.05, 0.45],
+    "up_vector": [0.0, 0.0, 1]
+  },
+  "top_down": {
+    "width": 700,
+    "height": 700,
+    "xlim": [-0.45, 0.45],
+    "ylim": [-0.45, 0.25],
+    "camera_z": 1.8,
+    "target_z": 0.4,
+    "nearval": 0.01,
+    "farval": 3.0
+  },
   "env_setup": {
     "drawer": 0.0,
     "button": 0.0,
@@ -11,18 +30,28 @@
     "lightbulb": 0.0,
     "green_light": 0.0
   },
+  "blocks": {
+    "hide": ["block_red", "block_blue", "block_pink"],
+    "hidden_position": [0.0, 0.0, -2.0],
+    "poses": {
+      "block_red": {"position": [-0.30, 0.10, 0.46], "rotation": [0.0, 0.0, 0.0]},
+      "block_blue": {"position": [-0.24, 0.10, 0.46], "rotation": [0.0, 0.0, 0.0]},
+      "block_pink": {"position": [-0.18, 0.10, 0.46], "rotation": [0.0, 0.0, 0.0]}
+    }
+
+  },
   "action_segments": [
     {
-      "steps": 10,
-      "action": [0.01, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+      "steps": 40,
+      "action": [0.2, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
     },
     {
-      "steps": 10,
-      "action": [-0.01, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+      "steps": 40,
+      "action": [-0.2, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0]
     },
     {
-      "steps": 10,
-      "action": [0.0, 0.01, 0.0, 0.0, 0.0, 0.0, -1.0]
+      "steps": 40,
+      "action": [0.0, 0.2, 0.0, 0.0, 0.0, 0.0, -1.0]
     }
   ]
 }
