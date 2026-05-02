@@ -305,8 +305,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/31/a3/5b1562db76a5a488274b2332a97199b32d0442aca0ed193697fd47786316/uvicorn-0.46.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/93/8c/2e650f2afeb7ee576912636c23ddb621c91ac6a98e66dc8d29c3c69446e1/werkzeug-3.1.8-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/08/8a/0861bec20485572fbddf3dfba2910e38fe249796cb73ecdeb74e07eeb8d3/zipp-3.23.1-py3-none-any.whl
-      - pypi: /home/moritz/src/guided-diffusion/robomimic
-      - pypi: /home/tassos/phd/research/corallab-stl
+      - pypi: ./robomimic
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
   build_number: 20
@@ -609,11 +608,6 @@ packages:
   - pytest-xdist ; extra == 'test-no-images'
   - wurlitzer ; extra == 'test-no-images'
   requires_python: '>=3.10'
-- pypi: /home/tassos/phd/research/corallab-stl
-  name: corallab-stl
-  version: 0.5.1
-  sha256: f7dd0d37453ff7cca369d1b020b779dfdca5241c7080b04a57e9911b633d2e5f
-  requires_python: '>=3.10,<4.0'
 - pypi: https://files.pythonhosted.org/packages/c7/08/ffd537b605568a148543ac3c2b239708ae0bd635064bab41359252ef88ed/cryptography-46.0.7-cp38-abi3-manylinux_2_28_x86_64.whl
   name: cryptography
   version: 46.0.7
@@ -3770,7 +3764,7 @@ packages:
   - pkg:pypi/requests?source=compressed-mapping
   size: 63712
   timestamp: 1774894783063
-- pypi: /home/moritz/src/guided-diffusion/robomimic
+- pypi: ./robomimic
   name: robomimic
   version: 0.5.0
   sha256: 3495ce04ea1e12a389fcafc889c1fc00b5940bc3001e02b92d1e6df05dd2cd8c
