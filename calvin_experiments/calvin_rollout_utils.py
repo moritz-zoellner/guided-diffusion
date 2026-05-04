@@ -154,10 +154,10 @@ def stl_atomic_labels(scene_state: Sequence[float]) -> Dict[str, bool]:
 
     state = np.asarray(scene_state)
     return {
-        "drawer_open": bool(state[SCENE_INDEX["drawer"]] > 0.12),
-        "drawer_closed": bool(state[SCENE_INDEX["drawer"]] < 0.04),
+        "drawer_open": bool(state[SCENE_INDEX["drawer"]] > 0.08),
+        "drawer_closed": bool(state[SCENE_INDEX["drawer"]] <= 0.08),
         "button_on": bool(state[SCENE_INDEX["green_light"]] > 0.5),
         "button_off": bool(state[SCENE_INDEX["green_light"]] <= 0.5),
-        "switch_on": bool(state[SCENE_INDEX["lightbulb"]] > 0.5),
-        "switch_off": bool(state[SCENE_INDEX["lightbulb"]] <= 0.5),
+        "switch_on": bool(state[SCENE_INDEX["switch"]] > 0.045),
+        "switch_off": bool(state[SCENE_INDEX["switch"]] <= 0.045),
     }

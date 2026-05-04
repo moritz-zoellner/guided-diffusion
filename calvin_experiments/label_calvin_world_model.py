@@ -9,7 +9,7 @@ import torch
 import corallab_stl.torch as stl
 
 
-LABEL_NAMES = ["switch_on", "button_pressed", "drawer_open"]
+LABEL_NAMES = ["switch_on", "button_on", "drawer_open"]
 
 SCENE_OBS_INDICES = {
     "slide": 0,
@@ -21,9 +21,9 @@ SCENE_OBS_INDICES = {
 }
 
 LABEL_THRESHOLDS = {
-    "switch_on": 0.055,       # midpoint of base__switch joint limits [0, 0.11]
-    "button_pressed": 0.0125, # midpoint of base__button joint limits [0, 0.025]
-    "drawer_open": 0.12,      # CALVIN open_drawer task threshold
+    "switch_on": 0.045,   # midpoint of rollout switch limits [0, 0.09]
+    "button_on": 0.5,     # midpoint of rollout green_light limits [0, 1]
+    "drawer_open": 0.08,  # midpoint of rollout drawer limits [0, 0.16]
 }
 
 
@@ -41,7 +41,7 @@ def get_demo_keys(hdf5_path, mask=None):
 
 
 def label_scene_states(scene_states):
-    """Return binary [switch_on, button_pressed, drawer_open] labels."""
+    """Return binary [switch_on, button_on, drawer_open] rollout-process labels."""
     scene_states_t = torch.as_tensor(scene_states, dtype=torch.float32)
 
     state = stl.Var("state", dim=24)
@@ -50,9 +50,9 @@ def label_scene_states(scene_states):
         lambda s, _: s[SCENE_OBS_INDICES["switch"]] - LABEL_THRESHOLDS["switch_on"],
         0.0,
     )
-    button_pressed = stl.Predicate(
+    button_on = stl.Predicate(
         state,
-        lambda s, _: s[SCENE_OBS_INDICES["button"]] - LABEL_THRESHOLDS["button_pressed"],
+        lambda s, _: s[SCENE_OBS_INDICES["led"]] - LABEL_THRESHOLDS["button_on"],
         0.0,
     )
     drawer_open = stl.Predicate(
@@ -60,7 +60,7 @@ def label_scene_states(scene_states):
         lambda s, _: s[SCENE_OBS_INDICES["drawer"]] - LABEL_THRESHOLDS["drawer_open"],
         0.0,
     )
-    predicates = [switch_on, button_pressed, drawer_open]
+    predicates = [switch_on, button_on, drawer_open]
     labels = torch.stack([p({"state": scene_states_t}) >= 0.0 for p in predicates], axis=-1)
     return labels.cpu().numpy().astype(np.float32)
 
