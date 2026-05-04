@@ -26,6 +26,12 @@ SCENE_INDEX = {
 ADJUSTABLES = ("sliding_door", "drawer", "switch", "green_light")
 ADJUSTABLE_INDEX = (0, 1, 3, 5)
 ADJUSTABLE_LIMITS = ((0.0, 0.27), (0.0, 0.16), (0.0, 0.09), (0.0, 1.0))
+ADJUSTABLE_BEHAVIORS = (
+    ("door_right", "door_left"),
+    ("drawer_close", "drawer_open"),
+    ("switch_off", "switch_on"),
+    ("button_off", "button_on"),
+)
 
 BLOCK_POS_SLICES = {
     "red": slice(6, 9),
@@ -75,34 +81,41 @@ def articulated_binaries_from_start_state(start_state: Sequence[float]) -> list[
     return binary_list
 
 
-def classify_behavior(start_state: Sequence[float], state: Sequence[float]) -> str:
-    """Classify a rollout segment using DynaGuide's CALVIN behavior thresholds."""
+def classify_behavior(
+    start_state: Sequence[float],
+    state: Sequence[float],
+    robot_pos: Optional[Sequence[float]] = None,
+    binaries: Optional[Iterable[bool]] = None,
+    for_display: bool = False,
+) -> str:
+    """Classify behavior with the same criteria used for rollout stopping."""
 
     start_state = np.asarray(start_state)
     state = np.asarray(state)
+    if binaries is None:
+        binaries = articulated_binaries_from_start_state(start_state)
 
-    if state[SCENE_INDEX["green_light"]] > 0.8 and start_state[SCENE_INDEX["green_light"]] < 0.2:
-        return "button_on"
-    if state[SCENE_INDEX["green_light"]] < 0.2 and start_state[SCENE_INDEX["green_light"]] > 0.8:
-        return "button_off"
-    if state[SCENE_INDEX["switch"]] < 0.01 and start_state[SCENE_INDEX["switch"]] > 0.07:
-        return "switch_off"
-    if state[SCENE_INDEX["switch"]] > 0.07 and start_state[SCENE_INDEX["switch"]] < 0.01:
-        return "switch_on"
-    if state[SCENE_INDEX["drawer"]] < 0.05 and start_state[SCENE_INDEX["drawer"]] > 0.10:
-        return "drawer_close"
-    if state[SCENE_INDEX["drawer"]] > 0.10 and start_state[SCENE_INDEX["drawer"]] < 0.05:
-        return "drawer_open"
-    if state[SCENE_INDEX["sliding_door"]] < 0.05 and start_state[SCENE_INDEX["sliding_door"]] > 0.25:
-        return "door_right"
-    if state[SCENE_INDEX["sliding_door"]] > 0.25 and start_state[SCENE_INDEX["sliding_door"]] < 0.05:
-        return "door_left"
-    if np.linalg.norm(state[BLOCK_POS_SLICES["red"]] - start_state[BLOCK_POS_SLICES["red"]]) > 0.01:
-        return "red_displace"
-    if np.linalg.norm(state[BLOCK_POS_SLICES["blue"]] - start_state[BLOCK_POS_SLICES["blue"]]) > 0.01:
-        return "blue_displace"
-    if np.linalg.norm(state[BLOCK_POS_SLICES["pink"]] - start_state[BLOCK_POS_SLICES["pink"]]) > 0.01:
-        return "pink_displace"
+    for binary, idx, limits, names in zip(binaries, ADJUSTABLE_INDEX, ADJUSTABLE_LIMITS, ADJUSTABLE_BEHAVIORS):
+        span = limits[1] - limits[0]
+        midpoint = limits[0] + span / 2
+        low_threshold = limits[0] + 0.25 * span if for_display else midpoint
+        high_threshold = limits[0] + 0.75 * span if for_display else midpoint
+        high_to_low_name, low_to_high_name = names
+
+        if binary and state[idx] < low_threshold:
+            return high_to_low_name
+        if not binary and state[idx] > high_threshold:
+            return low_to_high_name
+
+    if robot_pos is not None:
+        robot_pos = np.asarray(robot_pos)
+        block_threshold = 0.03 if for_display else 0.001
+        for color, pos_slice in BLOCK_POS_SLICES.items():
+            if np.linalg.norm(robot_pos - state[pos_slice]) < 0.06:
+                xy_delta = state[pos_slice.start : pos_slice.start + 2] - start_state[pos_slice.start : pos_slice.start + 2]
+                if np.linalg.norm(xy_delta) > block_threshold:
+                    return f"{color}_displace"
+
     return "other"
 
 
@@ -110,42 +123,12 @@ def check_state_difference(
     start_state: Sequence[float],
     state: Sequence[float],
     robot_pos: Sequence[float],
-    binaries: Iterable[bool],
+    binaries: Optional[Iterable[bool]] = None,
     for_display: bool = False,
 ) -> bool:
-    """DynaGuide rollout stopper.
+    """Return True once `classify_behavior` sees a stopping event."""
 
-    Returns True once an articulated object changes direction relative to the
-    binary start state, or when a block near the robot has moved.
-    """
-
-    start_state = np.asarray(start_state)
-    state = np.asarray(state)
-    robot_pos = np.asarray(robot_pos)
-
-    for binary, idx, limits in zip(binaries, ADJUSTABLE_INDEX, ADJUSTABLE_LIMITS):
-        midpoint = (limits[1] - limits[0]) / 2
-        near_low = limits[0] + 0.25 * (limits[1] - limits[0])
-        near_high = limits[0] + 0.75 * (limits[1] - limits[0])
-
-        if not for_display:
-            if binary and state[idx] < midpoint:
-                return True
-            if not binary and state[idx] > midpoint:
-                return True
-        else:
-            if binary and state[idx] < near_low:
-                return True
-            if not binary and state[idx] > near_high:
-                return True
-
-    block_threshold = 0.03 if for_display else 0.001
-    for color, pos_slice in BLOCK_POS_SLICES.items():
-        del color
-        if np.linalg.norm(robot_pos - state[pos_slice]) < 0.06:
-            if np.linalg.norm(state[pos_slice.start : pos_slice.start + 2] - start_state[pos_slice.start : pos_slice.start + 2]) > block_threshold:
-                return True
-    return False
+    return classify_behavior(start_state, state, robot_pos, binaries, for_display) != "other"
 
 
 def first_behavior_event(
@@ -161,7 +144,8 @@ def first_behavior_event(
     binaries = articulated_binaries_from_start_state(start_state)
     for step in range(1, len(scene_states)):
         if check_state_difference(start_state, scene_states[step], robot_states[step, :3], binaries, for_display):
-            return BehaviorEvent(classify_behavior(start_state, scene_states[step]), step)
+            name = classify_behavior(start_state, scene_states[step], robot_states[step, :3], binaries, for_display)
+            return BehaviorEvent(name, step)
     return None
 
 

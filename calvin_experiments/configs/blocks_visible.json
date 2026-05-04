@@ -2,6 +2,7 @@
   "name": "blocks_visible",
   "description": "Articulated objects start inactive or closed, and all movable blocks remain visible in their default poses.",
   "env_setup": {
+    "sliding_door": 0.0,
     "drawer": 0.0,
     "button": 0.0,
     "switch": 0.0,

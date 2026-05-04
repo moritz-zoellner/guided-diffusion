@@ -134,7 +134,7 @@ class PlayTableScene:
         for i in range(num_sampling_iterations):
             for obj in self.movable_objects:
                 obj.reset()
-            self.p.stepSimulation()
+            self.p.stepSimulation(physicsClientId=self.cid)
             contact = False
             for obj_a, obj_b in itertools.combinations(self.movable_objects, 2):
                 if np.any(len(self.p.getContactPoints(bodyA=obj_a.uid, bodyB=obj_b.uid, physicsClientId=self.cid))):
