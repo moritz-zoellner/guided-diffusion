@@ -8,12 +8,15 @@ model labeling, and post-hoc trace analysis without depending on DynaGuide.
 from __future__ import annotations
 
 import json
+import gc
+import os
 import random
 import re
 import sys
 import time
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
@@ -127,6 +130,41 @@ def format_probs(values: Sequence[float]) -> str:
 def load_json_config(path: Path | str) -> Dict[str, Any]:
     with open(path, "r") as f:
         return json.load(f)
+
+
+@contextmanager
+def suppress_native_output(enabled: bool = True):
+    """Suppress Python and native C/C++ writes to stdout/stderr."""
+
+    if not enabled:
+        yield
+        return
+
+    stdout_fd = stderr_fd = devnull_fd = None
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        stdout_fd = os.dup(1)
+        stderr_fd = os.dup(2)
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            os.dup2(devnull_fd, 1)
+            os.dup2(devnull_fd, 2)
+            yield
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        if stdout_fd is not None:
+            os.dup2(stdout_fd, 1)
+            os.close(stdout_fd)
+        if stderr_fd is not None:
+            os.dup2(stderr_fd, 2)
+            os.close(stderr_fd)
+        if devnull_fd is not None:
+            os.close(devnull_fd)
 
 
 #####
@@ -253,6 +291,72 @@ def is_env_connected(env) -> bool:
         return False
 
 
+def close_env_quietly(env) -> None:
+    """Close a wrapped CALVIN env if it is still connected."""
+
+    if env is None:
+        return
+    try:
+        if is_env_connected(env):
+            with suppress_native_output():
+                get_calvin_unwrapped_env(env).close()
+                gc.collect()
+    except Exception:
+        pass
+
+
+def drop_env_quietly(namespace: Dict[str, Any], name: str = "env") -> None:
+    """Close and clear an env reference while suppressing EGL/PyBullet teardown chatter."""
+
+    env = namespace.get(name)
+    with suppress_native_output():
+        close_env_quietly(env)
+        namespace[name] = None
+        del env
+        gc.collect()
+
+
+def load_fresh_env_from_checkpoint(
+    ckpt_dict: Dict[str, Any],
+    seed: Optional[int] = None,
+    existing_env: Any = None,
+    render: bool = False,
+    render_offscreen: bool = True,
+    verbose: bool = False,
+    suppress_output: bool = True,
+):
+    """Create a fresh CALVIN env and return it with a copy of its base state.
+
+    Fresh envs avoid hidden PyBullet / CALVIN state leaking across repeated
+    rollouts. Output suppression keeps notebook sweeps readable.
+    """
+
+    import robomimic.utils.file_utils as FileUtils
+
+    close_env_quietly(existing_env)
+    seed_everything(seed)
+
+    def _load():
+        return FileUtils.env_from_checkpoint(
+            ckpt_dict=ckpt_dict,
+            render=render,
+            render_offscreen=render_offscreen,
+            verbose=verbose,
+        )
+
+    if suppress_output:
+        with suppress_native_output():
+            env, _ = _load()
+    else:
+        env, _ = _load()
+
+    if not is_env_connected(env):
+        raise RuntimeError("Fresh CALVIN env is disconnected immediately after env_from_checkpoint.")
+
+    base_env_state = {key: np.asarray(value, dtype=np.float32).copy() for key, value in env.get_state().items()}
+    return env, base_env_state
+
+
 def reset_env_to_scene_robot(env, scene: Sequence[float], robot: Sequence[float]):
     """Reset CALVIN to an explicit scene / robot state while keeping wrappers in sync."""
 
@@ -282,8 +386,12 @@ def reset_env_to_scene_robot(env, scene: Sequence[float], robot: Sequence[float]
     return env.reset_to(state)
 
 
-def render_visual_camera(env, video_cfg: Dict[str, Any]) -> np.ndarray:
+def render_visual_camera(env, video_cfg: Dict[str, Any], suppress_output: bool = True) -> np.ndarray:
     """Render the notebook visualization camera without changing policy observations."""
+
+    if suppress_output:
+        with suppress_native_output():
+            return render_visual_camera(env, video_cfg, suppress_output=False)
 
     if video_cfg.get("perspective") == "third_person":
         return env.render(
