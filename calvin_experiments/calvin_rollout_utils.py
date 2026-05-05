@@ -7,12 +7,22 @@ model labeling, and post-hoc trace analysis without depending on DynaGuide.
 
 from __future__ import annotations
 
+import json
 import random
+import re
+import sys
+import time
 from dataclasses import dataclass
-from typing import Dict, Iterable, Optional, Sequence, Tuple
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
+
+#####
+# low-dimensional CALVIN state constants
+#####
 
 SCENE_INDEX = {
     "sliding_door": 0,
@@ -38,6 +48,11 @@ BLOCK_POS_SLICES = {
     "blue": slice(12, 15),
     "pink": slice(18, 21),
 }
+BLOCK_POSE_SLICES = {
+    "block_red": (6, 9, 9, 12),
+    "block_blue": (12, 15, 15, 18),
+    "block_pink": (18, 21, 21, 24),
+}
 
 
 @dataclass(frozen=True)
@@ -47,6 +62,647 @@ class BehaviorEvent:
     name: str
     step: int
 
+
+#####
+# notebook setup and small formatting helpers
+#####
+
+def find_repo_root(start: Path | str | None = None) -> Path:
+    """Find this guided-diffusion checkout from a notebook or script path."""
+
+    start_path = Path.cwd() if start is None else Path(start)
+    for path in (start_path, *start_path.parents):
+        if (path / "calvin_experiments" / "calvin_rollout_utils.py").exists():
+            return path
+    raise FileNotFoundError(f"Could not find guided-diffusion repo root from {start_path}")
+
+
+def add_calvin_repo_paths(repo_root: Path) -> None:
+    """Add the local repo, robomimic, CALVIN env, and experiment paths to sys.path."""
+
+    for path in [
+        repo_root,
+        repo_root / "robomimic",
+        repo_root / "calvin" / "calvin_env",
+        repo_root / "calvin_experiments",
+    ]:
+        path_str = str(path)
+        if path_str not in sys.path:
+            sys.path.insert(0, path_str)
+
+
+def seed_everything(seed: Optional[int]) -> None:
+    """Seed Python, NumPy, and torch if torch is already imported."""
+
+    if seed is None:
+        return
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch_module = sys.modules.get("torch")
+    if torch_module is not None:
+        torch_module.manual_seed(seed)
+        if torch_module.cuda.is_available():
+            torch_module.cuda.manual_seed_all(seed)
+        torch_module.backends.cudnn.benchmark = False
+        torch_module.backends.cudnn.deterministic = True
+
+
+def to_numpy(value: Any) -> np.ndarray:
+    """Detach torch tensors and otherwise coerce values to NumPy arrays."""
+
+    if hasattr(value, "detach"):
+        return value.detach().cpu().numpy()
+    return np.asarray(value)
+
+
+def format_onehot(values: Sequence[int]) -> str:
+    return "[" + " ".join(f"{int(v):1d}" for v in values) + "]"
+
+
+def format_probs(values: Sequence[float]) -> str:
+    return "[" + " ".join(f"{float(v):6.3f}" for v in values) + "]"
+
+
+def load_json_config(path: Path | str) -> Dict[str, Any]:
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+#####
+# rollout folder naming helpers
+#####
+
+def readable_timestamp() -> str:
+    """Timestamp suffix for run folders, with readable date/time separators."""
+
+    return time.strftime("%d-%m-%y__%H-%M-%S")
+
+
+def policy_epoch_from_checkpoint(checkpoint_path: Path | str) -> str:
+    """Extract `epoch280` from checkpoint names like `model_epoch_280.pth`."""
+
+    match = re.search(r"epoch[_-]?(\d+)", Path(checkpoint_path).stem)
+    return f"epoch{match.group(1)}" if match else "epoch_unknown"
+
+
+def run_folder_name(prefix: str, *parts: object, timestamp: Optional[str] = None) -> str:
+    """Build readable run folder names with config first and date/time last."""
+
+    clean_parts = [str(part).strip("_") for part in (prefix, *parts) if part is not None and str(part) != ""]
+    if timestamp is None:
+        timestamp = readable_timestamp()
+    return "_".join([*clean_parts, timestamp])
+
+
+#####
+# model and checkpoint loading
+#####
+
+def resolve_checkpoint_path(checkpoint_path: Path | str, repo_root: Path | None = None) -> Path:
+    """Resolve a policy checkpoint file or newest .pth inside a models directory."""
+
+    checkpoint_path = Path(checkpoint_path)
+    if not checkpoint_path.is_absolute():
+        if repo_root is None:
+            repo_root = find_repo_root()
+        checkpoint_path = repo_root / checkpoint_path
+    if checkpoint_path.is_dir():
+        candidates = sorted(checkpoint_path.glob("*.pth"), key=lambda path: path.stat().st_mtime)
+        if not candidates:
+            raise FileNotFoundError(f"No .pth checkpoints found in {checkpoint_path}")
+        checkpoint_path = candidates[-1]
+        print(f"Using newest checkpoint in models folder: {checkpoint_path}")
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Policy checkpoint not found: {checkpoint_path}")
+    return checkpoint_path
+
+
+def automaton_model_for_eval(model_or_run_path: Path | str, device):
+    """Load an AutomatonMLP checkpoint plus normalization stats for evaluation."""
+
+    import torch
+
+    from calvin_experiments.label_calvin_world_model import LABEL_NAMES
+    from calvin_experiments.train_automaton_world_model import AutomatonMLP
+
+    model_or_run_path = Path(model_or_run_path)
+    ckpt_path = model_or_run_path / "best_model.pt" if model_or_run_path.is_dir() else model_or_run_path
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Automaton checkpoint not found: {ckpt_path}")
+
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    model_config = dict(ckpt.get("model_config", {}))
+    if not model_config:
+        state_dict = ckpt["model_state_dict"]
+        model_config = {
+            "state_dim": int(state_dict["state_enc.0.weight"].shape[1]),
+            "label_dim": int(state_dict["label_enc.0.weight"].shape[1]),
+            "action_chunk_dim": int(state_dict["action_enc.0.weight"].shape[1]),
+            "state_hidden": int(state_dict["state_enc.0.weight"].shape[0]),
+            "label_hidden": int(state_dict["label_enc.0.weight"].shape[0]),
+            "action_hidden": int(state_dict["action_enc.0.weight"].shape[0]),
+            "head_hidden": int(state_dict["head.0.weight"].shape[0]),
+            "dropout": 0.0,
+        }
+
+    stats = ckpt.get("normalization_stats")
+    if stats is None:
+        stats_path = ckpt_path.parent / "normalization_stats.npz"
+        if not stats_path.exists():
+            raise FileNotFoundError(f"No normalization stats in checkpoint or at {stats_path}")
+        z = np.load(stats_path)
+        stats = {key: z[key] for key in z.files}
+    stats = {key: np.asarray(value, dtype=np.float32) for key, value in stats.items()}
+
+    model = AutomatonMLP(**model_config).to(device)
+    model.load_state_dict(ckpt["model_state_dict"])
+    model.eval()
+
+    meta = {
+        "ckpt_path": str(ckpt_path),
+        "run_dir": str(ckpt_path.parent),
+        "model_config": model_config,
+        "label_names": ckpt.get("label_names", LABEL_NAMES),
+    }
+    return model, stats, meta
+
+
+#####
+# environment reset and scene initialization
+#####
+
+def get_calvin_unwrapped_env(env):
+    """Return the underlying CALVIN gym env through robomimic wrappers."""
+
+    current = env
+    while hasattr(current, "env"):
+        child = current.env
+        if hasattr(child, "unwrapped"):
+            return child.unwrapped
+        current = child
+    raise AttributeError("Could not find underlying CALVIN env")
+
+
+def is_env_connected(env) -> bool:
+    try:
+        calvin_env = get_calvin_unwrapped_env(env)
+        info = calvin_env.p.getConnectionInfo(physicsClientId=calvin_env.cid)
+        return bool(info.get("isConnected", False))
+    except Exception:
+        return False
+
+
+def reset_env_to_scene_robot(env, scene: Sequence[float], robot: Sequence[float]):
+    """Reset CALVIN to an explicit scene / robot state while keeping wrappers in sync."""
+
+    state = {
+        "scene": np.asarray(scene, dtype=np.float32).copy(),
+        "robot": np.asarray(robot, dtype=np.float32).copy(),
+    }
+    robomimic_env = env
+    frame_stack_env = env if hasattr(env, "_get_initial_obs_history") else None
+    if frame_stack_env is not None:
+        robomimic_env = frame_stack_env.env
+    gym_env = getattr(robomimic_env, "env", None)
+    if gym_env is not None and hasattr(gym_env, "reset") and hasattr(robomimic_env, "get_observation"):
+        raw_obs = gym_env.reset(scene_obs=state["scene"], robot_obs=state["robot"])
+        if isinstance(raw_obs, tuple):
+            raw_obs = raw_obs[0]
+        robomimic_env._current_obs = raw_obs
+        robomimic_env._current_reward = None
+        robomimic_env._current_done = None
+        obs = robomimic_env.get_observation(raw_obs)
+        if frame_stack_env is not None:
+            frame_stack_env.timestep = 0
+            frame_stack_env.update_obs(obs, reset=True)
+            frame_stack_env.obs_history = frame_stack_env._get_initial_obs_history(init_obs=obs)
+            return frame_stack_env._get_stacked_obs_from_history()
+        return obs
+    return env.reset_to(state)
+
+
+def render_visual_camera(env, video_cfg: Dict[str, Any]) -> np.ndarray:
+    """Render the notebook visualization camera without changing policy observations."""
+
+    if video_cfg.get("perspective") == "third_person":
+        return env.render(
+            mode="rgb_array",
+            height=int(video_cfg["height"]),
+            width=int(video_cfg["width"]),
+        )
+
+    import pybullet as p
+
+    calvin_env = get_calvin_unwrapped_env(env)
+    width = int(video_cfg["width"])
+    height = int(video_cfg["height"])
+    view_matrix = p.computeViewMatrix(
+        cameraEyePosition=video_cfg["look_from"],
+        cameraTargetPosition=video_cfg["look_at"],
+        cameraUpVector=video_cfg["up_vector"],
+    )
+    projection_matrix = p.computeProjectionMatrixFOV(
+        fov=float(video_cfg["fov"]),
+        aspect=width / height,
+        nearVal=float(video_cfg["nearval"]),
+        farVal=float(video_cfg["farval"]),
+    )
+    image = p.getCameraImage(
+        width=width,
+        height=height,
+        viewMatrix=view_matrix,
+        projectionMatrix=projection_matrix,
+        physicsClientId=calvin_env.cid,
+    )
+    return np.reshape(image[2], (height, width, 4))[:, :, :3].astype(np.uint8)
+
+
+def apply_block_scene_overrides(scene: np.ndarray, blocks_cfg: Dict[str, Any]) -> list[str]:
+    """Set block poses through scene_obs before reset_to, preserving env structure."""
+
+    applied = []
+    for name, pose_cfg in blocks_cfg.get("poses", {}).items():
+        if name not in BLOCK_POSE_SLICES:
+            print(f"Unknown block name in blocks.poses: {name}")
+            continue
+        pos_start, pos_end, rot_start, rot_end = BLOCK_POSE_SLICES[name]
+        if isinstance(pose_cfg, dict):
+            position = pose_cfg.get("position")
+            rotation = pose_cfg.get("rotation", [0.0, 0.0, 0.0])
+        else:
+            position = pose_cfg
+            rotation = [0.0, 0.0, 0.0]
+        scene[pos_start:pos_end] = np.asarray(position, dtype=np.float32)
+        scene[rot_start:rot_end] = np.asarray(rotation, dtype=np.float32)
+        applied.append(name)
+    return applied
+
+
+def fixed_scene_robot_from_config(
+    base_env_state: Dict[str, np.ndarray],
+    scene_config_path: Path | str,
+    robot_state_override: Optional[Sequence[float]] = None,
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    """Create fixed scene and robot reset arrays from a CALVIN scene config."""
+
+    scene_cfg = load_json_config(scene_config_path)
+    fixed_scene = np.asarray(base_env_state["scene"], dtype=np.float32).copy()
+    fixed_robot = np.asarray(base_env_state["robot"], dtype=np.float32).copy()
+    if robot_state_override is not None:
+        robot_override = np.asarray(robot_state_override, dtype=np.float32)
+        if robot_override.shape != fixed_robot.shape:
+            raise ValueError(f"ROBOT_STATE_OVERRIDE must have shape {fixed_robot.shape}, got {robot_override.shape}")
+        fixed_robot = robot_override.copy()
+    for name, value in scene_cfg.get("env_setup", {}).items():
+        if name not in SCENE_INDEX:
+            raise KeyError(f"Unknown env_setup key: {name}")
+        fixed_scene[SCENE_INDEX[name]] = float(value)
+    apply_block_scene_overrides(fixed_scene, scene_cfg.get("blocks", {}))
+    return fixed_scene, fixed_robot, scene_cfg
+
+
+#####
+# scene snapshot helpers for top-down plotting
+#####
+
+def _pose_from_joint_object(obj):
+    link_state = obj.p.getLinkState(obj.uid, obj.joint_index, physicsClientId=obj.cid)
+    return np.asarray(link_state[4], dtype=np.float32), np.asarray(link_state[5], dtype=np.float32)
+
+
+def _pose_from_link_object(obj, link_index):
+    link_state = obj.p.getLinkState(obj.uid, link_index, physicsClientId=obj.cid)
+    return np.asarray(link_state[4], dtype=np.float32), np.asarray(link_state[5], dtype=np.float32)
+
+
+def _pose_from_body_object(obj):
+    position, orientation = obj.p.getBasePositionAndOrientation(obj.uid, physicsClientId=obj.cid)
+    return np.asarray(position, dtype=np.float32), np.asarray(orientation, dtype=np.float32)
+
+
+def _aabb_from_object(obj, link_index=None):
+    if link_index is None:
+        lower, upper = obj.p.getAABB(obj.uid, physicsClientId=obj.cid)
+    else:
+        lower, upper = obj.p.getAABB(obj.uid, link_index, physicsClientId=obj.cid)
+    return np.asarray(lower, dtype=np.float32), np.asarray(upper, dtype=np.float32)
+
+
+def capture_scene_snapshot(env) -> Dict[str, Any]:
+    """Capture top-down plotting geometry from the currently reset CALVIN scene."""
+
+    scene = get_calvin_unwrapped_env(env).scene
+    snapshot = {"fixed_objects": [], "controls": [], "blocks": []}
+
+    for obj in scene.fixed_objects:
+        position, orientation = _pose_from_body_object(obj)
+        lower, upper = _aabb_from_object(obj)
+        snapshot["fixed_objects"].append(
+            {
+                "name": obj.name,
+                "position": position.tolist(),
+                "orientation": orientation.tolist(),
+                "aabb": [lower.tolist(), upper.tolist()],
+            }
+        )
+
+    for obj in scene.buttons:
+        position, orientation = _pose_from_joint_object(obj)
+        lower, upper = _aabb_from_object(obj, obj.joint_index)
+        snapshot["controls"].append(
+            {
+                "kind": "button",
+                "name": obj.name,
+                "position": position.tolist(),
+                "orientation": orientation.tolist(),
+                "aabb": [lower.tolist(), upper.tolist()],
+                "state": float(obj.get_state()),
+            }
+        )
+
+    for obj in scene.doors:
+        position, orientation = _pose_from_joint_object(obj)
+        lower, upper = _aabb_from_object(obj, obj.joint_index)
+        kind = "drawer" if "drawer" in obj.name else "slider" if "slide" in obj.name else "door"
+        snapshot["controls"].append(
+            {
+                "kind": kind,
+                "name": obj.name,
+                "position": position.tolist(),
+                "orientation": orientation.tolist(),
+                "aabb": [lower.tolist(), upper.tolist()],
+                "state": float(obj.get_state()),
+            }
+        )
+
+    for obj in scene.switches:
+        position, orientation = _pose_from_joint_object(obj)
+        lower, upper = _aabb_from_object(obj, obj.joint_index)
+        snapshot["controls"].append(
+            {
+                "kind": "switch",
+                "name": obj.name,
+                "position": position.tolist(),
+                "orientation": orientation.tolist(),
+                "aabb": [lower.tolist(), upper.tolist()],
+                "state": float(obj.get_state()),
+            }
+        )
+
+    for obj in scene.lights:
+        position, orientation = _pose_from_link_object(obj, obj.link_id)
+        lower, upper = _aabb_from_object(obj, obj.link_id)
+        snapshot["controls"].append(
+            {
+                "kind": "light",
+                "name": obj.name,
+                "position": position.tolist(),
+                "orientation": orientation.tolist(),
+                "aabb": [lower.tolist(), upper.tolist()],
+                "state": float(obj.get_state()),
+            }
+        )
+
+    for obj in scene.movable_objects:
+        position, orientation = _pose_from_body_object(obj)
+        lower, upper = _aabb_from_object(obj)
+        snapshot["blocks"].append(
+            {
+                "name": obj.name,
+                "position": position.tolist(),
+                "orientation": orientation.tolist(),
+                "aabb": [lower.tolist(), upper.tolist()],
+            }
+        )
+
+    return snapshot
+
+
+def save_scene_snapshot(snapshot: Dict[str, Any], path: Path | str) -> None:
+    with open(path, "w") as f:
+        json.dump(snapshot, f, indent=2)
+
+
+#####
+# top-down rollout plot helpers
+#####
+
+def _rect_from_aabb(ax, lower, upper, **kwargs):
+    from matplotlib.patches import Rectangle
+
+    width = float(upper[0] - lower[0])
+    height = float(upper[1] - lower[1])
+    patch = Rectangle((float(lower[0]), float(lower[1])), width, height, **kwargs)
+    ax.add_patch(patch)
+    return patch
+
+
+def _circle_from_aabb(ax, lower, upper, **kwargs):
+    from matplotlib.patches import Circle
+
+    center = ((float(lower[0]) + float(upper[0])) / 2, (float(lower[1]) + float(upper[1])) / 2)
+    radius = 0.5 * min(float(upper[0] - lower[0]), float(upper[1] - lower[1]))
+    patch = Circle(center, radius=radius, **kwargs)
+    ax.add_patch(patch)
+    return patch
+
+
+def scene_limits_from_snapshot(snapshot: Dict[str, Any], eef_xy: np.ndarray, padding: float = 0.05):
+    boxes = []
+    for item in snapshot.get("controls", []):
+        if "aabb" in item:
+            lower = np.asarray(item["aabb"][0], dtype=np.float32)
+            upper = np.asarray(item["aabb"][1], dtype=np.float32)
+            boxes.append((lower, upper))
+    if not boxes:
+        return (-0.4, 0.4), (-0.4, 0.25)
+
+    lower_xy = np.min([box[0][:2] for box in boxes], axis=0)
+    upper_xy = np.max([box[1][:2] for box in boxes], axis=0)
+    lower_xy = np.minimum(lower_xy, np.min(eef_xy[:, :2], axis=0))
+    upper_xy = np.maximum(upper_xy, np.max(eef_xy[:, :2], axis=0))
+    return (float(lower_xy[0] - padding), float(upper_xy[0] + padding)), (
+        float(lower_xy[1] - padding),
+        float(upper_xy[1] + padding),
+    )
+
+
+def draw_scene_snapshot(ax, snapshot: Dict[str, Any], eef_xy: Optional[np.ndarray] = None) -> None:
+    kind_styles = {
+        "button": {"facecolor": "#111111", "edgecolor": "#000000", "alpha": 0.95},
+        "slider": {"facecolor": "#4c566a", "edgecolor": "#1f2937", "alpha": 0.92},
+        "drawer": {"facecolor": "#7a5c4d", "edgecolor": "#2f241f", "alpha": 0.9},
+        "switch": {"facecolor": "#6b7280", "edgecolor": "black", "alpha": 0.9},
+        "light": {"facecolor": "#9ca3af", "edgecolor": "black", "alpha": 0.75},
+    }
+
+    for control in snapshot.get("controls", []):
+        lower = np.asarray(control["aabb"][0], dtype=np.float32)
+        upper = np.asarray(control["aabb"][1], dtype=np.float32)
+        kind = control["kind"]
+        style = kind_styles.get(kind, {"facecolor": "#adb5bd", "edgecolor": "black", "alpha": 0.8})
+        patch_kwargs = {
+            "facecolor": style["facecolor"],
+            "edgecolor": style["edgecolor"],
+            "linewidth": 1.0,
+            "alpha": style["alpha"],
+        }
+        if kind == "button":
+            _circle_from_aabb(ax, lower, upper, **patch_kwargs)
+        else:
+            _rect_from_aabb(ax, lower, upper, **patch_kwargs)
+        label_x = float((lower[0] + upper[0]) / 2)
+        label_y = float(upper[1] + 0.01)
+        ax.text(label_x, label_y, control["name"].replace("base__", ""), ha="center", va="bottom", fontsize=7, color="black")
+
+    if eef_xy is not None and len(eef_xy) > 0:
+        ax.plot(eef_xy[:, 0], eef_xy[:, 1], color="#ff3b30", linewidth=2.5, label="EEF XY path")
+        ax.scatter(eef_xy[0, 0], eef_xy[0, 1], c="#4b5563", s=55, edgecolors="white", linewidths=1.0, label="start")
+        ax.scatter(eef_xy[-1, 0], eef_xy[-1, 1], c="#111827", s=55, edgecolors="white", linewidths=1.0, label="end")
+
+    ax.set_aspect("equal")
+    ax.grid(color="white", alpha=0.2, linewidth=0.8)
+
+
+def plot_rollout_xy(
+    rollouts: Sequence[Dict[str, Any]],
+    scene_snapshot: Dict[str, Any],
+    title: str,
+    save_path: Path | str | None = None,
+    display_inline: bool = True,
+):
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    paths = [np.asarray(item["eef_xy"], dtype=np.float32) for item in rollouts]
+    behaviors = [item["behavior"] for item in rollouts]
+    unique_behaviors = sorted(set(behaviors))
+    cmap = plt.get_cmap("tab10")
+    behavior_colors = {behavior: cmap(idx % cmap.N) for idx, behavior in enumerate(unique_behaviors)}
+    all_eef_xy = np.concatenate(paths, axis=0)
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    ax.set_facecolor("#fbf7ef")
+    draw_scene_snapshot(ax, scene_snapshot)
+    for item, eef_xy in zip(rollouts, paths):
+        color = behavior_colors[item["behavior"]]
+        ax.plot(eef_xy[:, 0], eef_xy[:, 1], color=color, linewidth=2.0, alpha=0.75)
+        ax.scatter(eef_xy[0, 0], eef_xy[0, 1], c=[color], s=28, edgecolors="white", linewidths=0.7, alpha=0.85)
+        ax.scatter(eef_xy[-1, 0], eef_xy[-1, 1], c=[color], s=42, edgecolors="black", linewidths=0.7, alpha=0.9)
+
+    xlim, ylim = scene_limits_from_snapshot(scene_snapshot, all_eef_xy)
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.set_title(title)
+    ax.set_xlabel("world x [m]")
+    ax.set_ylabel("world y [m]")
+    ax.legend(
+        handles=[
+            Line2D([0], [0], color=behavior_colors[behavior], lw=2.5, label=f"{behavior} ({behaviors.count(behavior)})")
+            for behavior in unique_behaviors
+        ],
+        loc="upper right",
+    )
+
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=180, bbox_inches="tight")
+        print("plot:", save_path)
+
+    if display_inline:
+        png = BytesIO()
+        fig.savefig(png, format="png", dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        from IPython.display import Image, display
+
+        display(Image(data=png.getvalue()))
+    else:
+        plt.close(fig)
+
+
+def plot_rollouts_from_trace_summaries(
+    rollout_summaries: Sequence[Dict[str, Any]],
+    title: Optional[str] = None,
+    save_path: Path | str | None = None,
+    display_inline: bool = True,
+):
+    """Load trace files from env_playground summaries and draw the shared XY overlay."""
+
+    if not rollout_summaries:
+        print("Run rollout generation first; it writes trace .npz files for plotting.")
+        return
+
+    first_item = rollout_summaries[0]
+    scene_snapshot = load_json_config(first_item["scene_snapshot"])
+    rollouts = []
+    for item in rollout_summaries:
+        trace = np.load(item["trace"])
+        rollouts.append({"eef_xy": trace["eef_xy"], "behavior": item["behavior"]})
+
+    if title is None:
+        title = f"Top-down rollouts | {first_item['scene_config']} | {len(rollout_summaries)} trajectories"
+    if save_path is None:
+        save_path = Path(first_item["trace"]).parents[1] / "rollout_scene_overlay_all.png"
+    plot_rollout_xy(rollouts, scene_snapshot, title, save_path=save_path, display_inline=display_inline)
+
+
+#####
+# rollout artifact saving
+#####
+
+def save_rollout_artifacts(
+    rollout: Dict[str, Any],
+    frames: Sequence[np.ndarray],
+    output_dir: Path | str,
+    rollout_tag: str,
+    video_cfg: Dict[str, Any],
+    fps: int = 30,
+) -> Dict[str, Any]:
+    """Save a rollout video, trace npz, and per-rollout scene snapshot."""
+
+    import imageio.v2 as imageio
+
+    rollout_dir = Path(output_dir) / rollout_tag
+    rollout_dir.mkdir(parents=True, exist_ok=True)
+    scene_name = rollout["scene_config"]
+    video_path = rollout_dir / f"{scene_name}_{rollout_tag}_{video_cfg['perspective']}.mp4"
+    trace_path = rollout_dir / "rollout_trace.npz"
+    scene_snapshot_path = rollout_dir / "scene_snapshot.json"
+
+    imageio.mimsave(video_path, frames, fps=int(fps))
+    trace = {
+        "actions": np.asarray(rollout["actions"], dtype=np.float32),
+        "rewards": np.asarray(rollout["rewards"], dtype=np.float32),
+        "dones": np.asarray(rollout["dones"], dtype=bool),
+        "scene_states": np.asarray(rollout["scene_states"], dtype=np.float32),
+        "robot_states": np.asarray(rollout["robot_states"], dtype=np.float32),
+        "eef_xy": np.asarray(rollout["eef_xy"], dtype=np.float32),
+        "detected_behavior": np.asarray(rollout["behavior"]),
+        "detected_behavior_step": np.asarray(rollout["behavior_step"], dtype=np.int32),
+        "termination_step": np.asarray(rollout["termination_step"], dtype=np.int32),
+        "termination_reason": np.asarray(rollout["termination_reason"]),
+        "rollout_seed": np.asarray(-1 if rollout["seed"] is None else rollout["seed"], dtype=np.int32),
+        "scene_config": np.asarray(scene_name),
+    }
+    if "initial_label" in rollout:
+        trace["initial_label"] = np.asarray(rollout["initial_label"], dtype=np.int32)
+    if "final_label" in rollout:
+        trace["final_label"] = np.asarray(rollout["final_label"], dtype=np.int32)
+    np.savez_compressed(trace_path, **trace)
+    save_scene_snapshot(rollout["scene_snapshot"], scene_snapshot_path)
+
+    rollout["video"] = video_path
+    rollout["trace"] = trace_path
+    rollout["scene_snapshot_path"] = scene_snapshot_path
+    rollout["rollout_dir"] = rollout_dir
+    return rollout
+
+
+#####
+# initial state sampling and rollout classification
+#####
 
 def generate_reset_state(sim_hold: Optional[Dict[str, float]] = None) -> Tuple[np.ndarray, list[bool]]:
     """Match DynaGuide's randomized articulated-object reset state.
