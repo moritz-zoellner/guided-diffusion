@@ -20,6 +20,104 @@ from matplotlib import pyplot as plt
 
 STATE_COMPONENTS = ("obs/proprio", "obs/states")
 ACTION_KEY = "actions"
+STATE_REPRESENTATIONS = ("raw", "rot6d")
+
+# CALVIN low-dimensional observations in this dataset are:
+#   robot_obs/proprio: [tcp_pos(3), tcp_euler_xyz(3), gripper_width(1),
+#                       arm_joint_pos(7), gripper_action(1)]
+#   scene_obs/states:  [door/slider/drawer/button/light scalars(6),
+#                       block_red xyz+euler(6),
+#                       block_blue xyz+euler(6),
+#                       block_pink xyz+euler(6)]
+PROPRIO_TCP_EULER_SLICE = slice(3, 6)
+SCENE_SCALAR_DIM = 6
+SCENE_OBJECT_EULER_POSE_DIM = 6
+SCENE_OBJECT_POS_DIM = 3
+
+
+def euler_xyz_to_rot6d(euler_xyz):
+    """Convert CALVIN xyz Euler angles to the continuous 6D rotation representation."""
+    euler_xyz = np.asarray(euler_xyz, dtype=np.float32)
+    if euler_xyz.shape[-1] != 3:
+        raise ValueError(f"Expected last dim 3 for Euler angles, got shape {euler_xyz.shape}")
+
+    x = euler_xyz[..., 0]
+    y = euler_xyz[..., 1]
+    z = euler_xyz[..., 2]
+
+    sx, cx = np.sin(x), np.cos(x)
+    sy, cy = np.sin(y), np.cos(y)
+    sz, cz = np.sin(z), np.cos(z)
+
+    # Rotation matrix R = Rz(yaw) @ Ry(pitch) @ Rx(roll). Return the first
+    # two columns, matching the robomimic world-model 6D convention.
+    r00 = cz * cy
+    r10 = sz * cy
+    r20 = -sy
+
+    r01 = cz * sy * sx - sz * cx
+    r11 = sz * sy * sx + cz * cx
+    r21 = cy * sx
+
+    return np.stack([r00, r10, r20, r01, r11, r21], axis=-1).astype(np.float32)
+
+
+def convert_proprio_euler_to_rot6d(proprio):
+    if proprio.shape[-1] != 15:
+        raise ValueError(f"Expected CALVIN proprio dim 15, got shape {proprio.shape}")
+    return np.concatenate(
+        [
+            proprio[..., : PROPRIO_TCP_EULER_SLICE.start],
+            euler_xyz_to_rot6d(proprio[..., PROPRIO_TCP_EULER_SLICE]),
+            proprio[..., PROPRIO_TCP_EULER_SLICE.stop :],
+        ],
+        axis=-1,
+    ).astype(np.float32)
+
+
+def convert_scene_euler_to_rot6d(scene):
+    if scene.shape[-1] < SCENE_SCALAR_DIM:
+        raise ValueError(f"Expected CALVIN scene dim >= {SCENE_SCALAR_DIM}, got shape {scene.shape}")
+
+    object_tail_dim = scene.shape[-1] - SCENE_SCALAR_DIM
+    if object_tail_dim == 0:
+        return scene.astype(np.float32)
+    if object_tail_dim % SCENE_OBJECT_EULER_POSE_DIM != 0:
+        raise ValueError(
+            "Expected CALVIN scene object tail to be a multiple of "
+            f"{SCENE_OBJECT_EULER_POSE_DIM} ([xyz,euler] per object), got scene shape {scene.shape}"
+        )
+
+    components = [scene[..., :SCENE_SCALAR_DIM]]
+    n_objects = object_tail_dim // SCENE_OBJECT_EULER_POSE_DIM
+    for obj_idx in range(n_objects):
+        start = SCENE_SCALAR_DIM + obj_idx * SCENE_OBJECT_EULER_POSE_DIM
+        pos = scene[..., start : start + SCENE_OBJECT_POS_DIM]
+        euler = scene[..., start + SCENE_OBJECT_POS_DIM : start + SCENE_OBJECT_EULER_POSE_DIM]
+        components.extend([pos, euler_xyz_to_rot6d(euler)])
+
+    return np.concatenate(components, axis=-1).astype(np.float32)
+
+
+def state_representation_metadata(state_representation):
+    if state_representation == "raw":
+        return {
+            "name": "raw",
+            "description": "concat(obs/proprio, obs/states) with Euler rotations unchanged",
+            "rotation_fields": [],
+        }
+    if state_representation == "rot6d":
+        return {
+            "name": "rot6d",
+            "description": "TCP and movable-block Euler xyz rotations converted to 6D rotation columns",
+            "rotation_fields": [
+                {"component": "obs/proprio", "name": "tcp", "raw_indices": [3, 4, 5], "encoded_dim": 6},
+                {"component": "obs/states", "name": "block_red", "raw_indices": [9, 10, 11], "encoded_dim": 6},
+                {"component": "obs/states", "name": "block_blue", "raw_indices": [15, 16, 17], "encoded_dim": 6},
+                {"component": "obs/states", "name": "block_pink", "raw_indices": [21, 22, 23], "encoded_dim": 6},
+            ],
+        }
+    raise ValueError(f"Unknown state representation: {state_representation}")
 
 
 def get_demo_keys(hdf5_path, mask=None):
@@ -31,20 +129,29 @@ def get_demo_keys(hdf5_path, mask=None):
     return sorted(keys, key=lambda key: int(key.split("_")[-1]))
 
 
-def build_low_level_state(demo):
+def build_low_level_state(demo, state_representation="raw"):
+    if state_representation not in STATE_REPRESENTATIONS:
+        raise ValueError(f"Unknown state representation {state_representation!r}; choose from {STATE_REPRESENTATIONS}")
+
     components = []
     for component in STATE_COMPONENTS:
         group_name, dataset_name = component.split("/", 1)
-        components.append(demo[f"{group_name}/{dataset_name}"][:].astype(np.float32))
+        value = demo[f"{group_name}/{dataset_name}"][:].astype(np.float32)
+        if state_representation == "rot6d":
+            if component == "obs/proprio":
+                value = convert_proprio_euler_to_rot6d(value)
+            elif component == "obs/states":
+                value = convert_scene_euler_to_rot6d(value)
+        components.append(value)
     return np.concatenate(components, axis=-1).astype(np.float32)
 
 
-def build_calvin_dynamics_trajectories(hdf5_path, demo_keys):
+def build_calvin_dynamics_trajectories(hdf5_path, demo_keys, state_representation="raw"):
     trajectories = []
     with h5py.File(hdf5_path, "r") as f:
         for demo_key in demo_keys:
             demo = f[f"data/{demo_key}"]
-            states_all = build_low_level_state(demo)
+            states_all = build_low_level_state(demo, state_representation=state_representation)
             actions_all = demo[ACTION_KEY][:].astype(np.float32)
 
             if len(states_all) != len(actions_all):
@@ -270,13 +377,19 @@ def load_dynamics_model_for_eval(model_or_run_path, device="cpu", checkpoint_nam
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--dataset", type=Path, default=Path("calvin/dataset/calvin_debug_dataset/debug_data.hdf5"))
-    parser.add_argument("--output-root", type=Path, default=Path("calvin/dynamics_world_model"))
+    parser.add_argument("--dataset", type=Path, default=Path("calvin/dataset/calvin_D_training.hdf5"))
+    parser.add_argument("--output-root", type=Path, default=Path("outputs/calvin/dynamics_world_model"))
     parser.add_argument("--split", choices=["mask", "random"], default="mask")
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--train-mask", default="train")
     parser.add_argument("--val-mask", default="valid")
     parser.add_argument("--max-demos", type=int, default=None)
+    parser.add_argument(
+        "--state-representation",
+        choices=STATE_REPRESENTATIONS,
+        default="rot6d",
+        help="State encoding used by the dynamics model. rot6d removes Euler angle wrap discontinuities.",
+    )
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--patience", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=512)
@@ -302,10 +415,16 @@ def main():
             allowed = set(all_keys)
             train_keys = [key for key in train_keys if key in allowed]
             val_keys = [key for key in val_keys if key in allowed]
-        train_trajectories = build_calvin_dynamics_trajectories(args.dataset, train_keys)
-        val_trajectories = build_calvin_dynamics_trajectories(args.dataset, val_keys)
+        train_trajectories = build_calvin_dynamics_trajectories(
+            args.dataset, train_keys, state_representation=args.state_representation
+        )
+        val_trajectories = build_calvin_dynamics_trajectories(
+            args.dataset, val_keys, state_representation=args.state_representation
+        )
     else:
-        trajectories = build_calvin_dynamics_trajectories(args.dataset, all_keys)
+        trajectories = build_calvin_dynamics_trajectories(
+            args.dataset, all_keys, state_representation=args.state_representation
+        )
         train_trajectories, val_trajectories = split_trajectories(trajectories, args.val_ratio, args.split_seed)
 
     flat_train = flatten_trajectories(train_trajectories)
@@ -357,6 +476,8 @@ def main():
         "output_root": str(args.output_root),
         "run_dir": str(run_dir),
         "state_components": list(STATE_COMPONENTS),
+        "state_representation": args.state_representation,
+        "state_representation_metadata": state_representation_metadata(args.state_representation),
         "action_key": ACTION_KEY,
         "target": "next_low_level_state_delta",
         "model_config": model_config,
@@ -377,8 +498,13 @@ def main():
         "val_ratio": args.val_ratio,
         "dataset": str(args.dataset),
         "state_components": list(STATE_COMPONENTS),
+        "state_representation": args.state_representation,
+        "state_representation_metadata": state_representation_metadata(args.state_representation),
         "action_key": ACTION_KEY,
-        "transition_rule": "state_t=concat(obs/proprio,obs/states)[t], action_t=actions[t], next_state=concat(...)[t+1]",
+        "transition_rule": (
+            "state_t=encoded concat(obs/proprio,obs/states)[t], action_t=actions[t], "
+            "next_state=encoded concat(...)[t+1]"
+        ),
         "train_demos": [{"path": str(traj["path"]), "demo_id": traj["demo_id"]} for traj in train_trajectories],
         "val_demos": [{"path": str(traj["path"]), "demo_id": traj["demo_id"]} for traj in val_trajectories],
     }
@@ -390,6 +516,7 @@ def main():
     print(f"Parameters: {train_config['num_parameters']:,}")
     print(f"Train trajectories: {len(train_trajectories):,} | Val trajectories: {len(val_trajectories):,}")
     print(f"Train samples: {len(train_dataset):,} | Val samples: {len(val_dataset):,}")
+    print(f"State representation: {args.state_representation}")
     print(f"State dim: {model_config['state_dim']} | Action dim: {model_config['action_dim']}")
     print(f"Model config: {model_config}")
 
