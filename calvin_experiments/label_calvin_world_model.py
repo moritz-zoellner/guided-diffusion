@@ -9,7 +9,17 @@ import torch
 import corallab_stl.torch as stl
 
 
-LABEL_NAMES = ["switch_on", "button_on", "drawer_open"]
+LABEL_NAMES = [
+    "switch_on",
+    "switch_off",
+    "button_on",
+    "button_off",
+    "button_pressed",
+    "drawer_open",
+    "drawer_closed",
+    "door_left",
+    "door_right",
+]
 
 SCENE_OBS_INDICES = {
     "slide": 0,
@@ -21,9 +31,19 @@ SCENE_OBS_INDICES = {
 }
 
 LABEL_THRESHOLDS = {
-    "switch_on": 0.045,   # midpoint of rollout switch limits [0, 0.09]
-    "button_on": 0.5,     # midpoint of rollout green_light limits [0, 1]
-    "drawer_open": 0.08,  # midpoint of rollout drawer limits [0, 0.16]
+    "switch_light": 0.5,
+    "button_light": 0.5,
+    "button_pressed": 0.0125,  # midpoint of button joint limits [0, 0.025]
+    "drawer": 0.12,       # CALVIN open/close drawer success displacement
+    "door": 0.15,         # CALVIN slide-left/right success displacement
+}
+
+LEGACY_LABEL_THRESHOLDS = {
+    "switch": 0.045,
+    "button_light": 0.5,
+    "button_pressed": 0.0125,
+    "drawer": 0.08,
+    "door": 0.15,
 }
 
 
@@ -40,29 +60,78 @@ def get_demo_keys(hdf5_path, mask=None):
     return sorted(keys, key=_demo_sort_key)
 
 
-def label_scene_states(scene_states):
-    """Return binary [switch_on, button_on, drawer_open] rollout-process labels."""
+def label_scene_states_for_names(scene_states, label_names, label_thresholds=None):
+    """Return binary CALVIN propositions in a checkpoint-specific label order."""
     scene_states_t = torch.as_tensor(scene_states, dtype=torch.float32)
+    label_names = list(label_names)
+    thresholds = dict(LEGACY_LABEL_THRESHOLDS if label_thresholds is None else label_thresholds)
+    use_effect_state_for_switch = "switch_light" in thresholds
 
     state = stl.Var("state", dim=24)
-    switch_on = stl.Predicate(
-        state,
-        lambda s, _: s[SCENE_OBS_INDICES["switch"]] - LABEL_THRESHOLDS["switch_on"],
-        0.0,
-    )
-    button_on = stl.Predicate(
-        state,
-        lambda s, _: s[SCENE_OBS_INDICES["led"]] - LABEL_THRESHOLDS["button_on"],
-        0.0,
-    )
-    drawer_open = stl.Predicate(
-        state,
-        lambda s, _: s[SCENE_OBS_INDICES["drawer"]] - LABEL_THRESHOLDS["drawer_open"],
-        0.0,
-    )
-    predicates = [switch_on, button_on, drawer_open]
+
+    switch_key = "lightbulb" if use_effect_state_for_switch else "switch"
+    switch_threshold_key = "switch_light" if use_effect_state_for_switch else "switch"
+
+    predicate_builders = {
+        "switch_on": lambda: stl.Predicate(
+            state,
+            lambda s, _: s[SCENE_OBS_INDICES[switch_key]] - thresholds[switch_threshold_key],
+            0.0,
+        ),
+        "switch_off": lambda: stl.Predicate(
+            state,
+            lambda s, _: thresholds[switch_threshold_key] - s[SCENE_OBS_INDICES[switch_key]],
+            0.0,
+        ),
+        "button_on": lambda: stl.Predicate(
+            state,
+            lambda s, _: s[SCENE_OBS_INDICES["led"]] - thresholds["button_light"],
+            0.0,
+        ),
+        "button_off": lambda: stl.Predicate(
+            state,
+            lambda s, _: thresholds["button_light"] - s[SCENE_OBS_INDICES["led"]],
+            0.0,
+        ),
+        "button_pressed": lambda: stl.Predicate(
+            state,
+            lambda s, _: s[SCENE_OBS_INDICES["button"]] - thresholds["button_pressed"],
+            0.0,
+        ),
+        "drawer_open": lambda: stl.Predicate(
+            state,
+            lambda s, _: s[SCENE_OBS_INDICES["drawer"]] - thresholds["drawer"],
+            0.0,
+        ),
+        "drawer_closed": lambda: stl.Predicate(
+            state,
+            lambda s, _: thresholds["drawer"] - s[SCENE_OBS_INDICES["drawer"]],
+            0.0,
+        ),
+        "door_left": lambda: stl.Predicate(
+            state,
+            lambda s, _: s[SCENE_OBS_INDICES["slide"]] - thresholds["door"],
+            0.0,
+        ),
+        "door_right": lambda: stl.Predicate(
+            state,
+            lambda s, _: thresholds["door"] - s[SCENE_OBS_INDICES["slide"]],
+            0.0,
+        ),
+    }
+
+    unknown_labels = [name for name in label_names if name not in predicate_builders]
+    if unknown_labels:
+        raise ValueError(f"Unknown CALVIN label names: {unknown_labels}")
+
+    predicates = [predicate_builders[name]() for name in label_names]
     labels = torch.stack([p({"state": scene_states_t}) >= 0.0 for p in predicates], axis=-1)
     return labels.cpu().numpy().astype(np.float32)
+
+
+def label_scene_states(scene_states):
+    """Return the current default binary task-oriented CALVIN propositions."""
+    return label_scene_states_for_names(scene_states, LABEL_NAMES, LABEL_THRESHOLDS)
 
 
 def next_changed_labels(labels, immediate_next_labels):
@@ -91,6 +160,34 @@ def next_changed_labels(labels, immediate_next_labels):
         previous = current.copy()
 
     return out
+
+
+def horizon_eventual_labels(labels, next_labels, action_horizon):
+    """
+    Target for an H-step action chunk.
+
+    For chunk starting at t, mark propositions that appear in the next-label
+    predictions from every state touched by the chunk: next_labels[t:t+H+1].
+    If the chunk does not pass through a label change, these usually point to
+    the same out-of-horizon event. If a short event happens inside the chunk,
+    it is preserved by the max over the intermediate next-label targets.
+    """
+    labels = np.asarray(labels, dtype=np.float32)
+    next_labels = np.asarray(next_labels, dtype=np.float32)
+    action_horizon = int(action_horizon)
+    if len(labels) != len(next_labels):
+        raise ValueError("labels and next_labels must have the same length")
+    if action_horizon <= 0:
+        raise ValueError("action_horizon must be positive")
+
+    n_chunks = len(labels) - action_horizon
+    if n_chunks <= 0:
+        return np.empty((0, labels.shape[-1]), dtype=np.float32)
+
+    targets = np.empty((n_chunks, labels.shape[-1]), dtype=np.float32)
+    for idx in range(n_chunks):
+        targets[idx] = next_labels[idx : idx + action_horizon + 1].max(axis=0)
+    return targets
 
 
 def build_labelled_calvin_trajectories(hdf5_path, mask=None, max_demos=None):
@@ -186,7 +283,7 @@ def sanity_report(trajectories, max_runs_to_print=8):
         for label, count in sorted(counts.items()):
             print(f"    {label}: {count}")
 
-    all_zero = (0, 0, 0)
+    all_zero = tuple(0 for _ in LABEL_NAMES)
     if set(Counter(_as_tuple(row) for row in labels)) == {all_zero}:
         print("\nWARNING: every current label is (0, 0, 0). Check thresholds or scene_obs ordering.")
     if set(Counter(_as_tuple(row) for row in next_labels)) == {all_zero}:

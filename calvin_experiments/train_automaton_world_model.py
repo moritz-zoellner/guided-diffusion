@@ -15,7 +15,22 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
-from label_calvin_world_model import LABEL_NAMES, label_scene_states, next_changed_labels
+try:
+    from label_calvin_world_model import (
+        LABEL_NAMES,
+        LABEL_THRESHOLDS,
+        horizon_eventual_labels,
+        label_scene_states,
+        next_changed_labels,
+    )
+except ModuleNotFoundError:
+    from calvin_experiments.label_calvin_world_model import (
+        LABEL_NAMES,
+        LABEL_THRESHOLDS,
+        horizon_eventual_labels,
+        label_scene_states,
+        next_changed_labels,
+    )
 
 
 matplotlib.use("Agg")
@@ -100,10 +115,16 @@ def flatten_trajectories(trajectories, action_horizon):
             axis=0,
         ).reshape(n_chunks, -1)
 
+        targets = horizon_eventual_labels(traj["labels"], traj["next_labels"], action_horizon)
+        if len(targets) != n_chunks:
+            raise ValueError(
+                f"{traj['demo_id']}: expected {n_chunks} horizon targets, got {len(targets)}"
+            )
+
         flat["states"].append(traj["states"][:-action_horizon])
         flat["actions"].append(action_chunks)
         flat["labels"].append(traj["labels"][:-action_horizon])
-        flat["next_labels"].append(traj["next_labels"][action_horizon:])
+        flat["next_labels"].append(targets)
 
     if not flat["states"]:
         raise ValueError(f"No trajectories were long enough for action_horizon={action_horizon}.")
@@ -360,6 +381,7 @@ def main():
         "output_root": str(args.output_root),
         "run_dir": str(run_dir),
         "label_names": LABEL_NAMES,
+        "label_thresholds": LABEL_THRESHOLDS,
         "model_config": model_config,
         "optimizer": "Adam",
         "loss_fn": "BCEWithLogitsLoss",
@@ -381,6 +403,9 @@ def main():
         "state_input": ["obs/proprio", "obs/states"],
         "action_input": "actions",
         "label_source": "obs/states",
+        "label_names": LABEL_NAMES,
+        "label_thresholds": LABEL_THRESHOLDS,
+        "target_rule": "max(next_changed_labels[t:t+H+1])",
         "train_demos": [{"path": str(traj["path"]), "demo_id": traj["demo_id"]} for traj in train_trajectories],
         "val_demos": [{"path": str(traj["path"]), "demo_id": traj["demo_id"]} for traj in val_trajectories],
     }

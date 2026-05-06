@@ -219,6 +219,7 @@ def resolve_checkpoint_path(checkpoint_path: Path | str, repo_root: Path | None 
 def automaton_model_for_eval(model_or_run_path: Path | str, device):
     """Load an AutomatonMLP checkpoint plus normalization stats for evaluation."""
 
+    import json
     import torch
 
     from calvin_experiments.label_calvin_world_model import LABEL_NAMES
@@ -253,6 +254,40 @@ def automaton_model_for_eval(model_or_run_path: Path | str, device):
         stats = {key: z[key] for key in z.files}
     stats = {key: np.asarray(value, dtype=np.float32) for key, value in stats.items()}
 
+    run_config = {}
+    for metadata_name in ["train_config.json", "data_provenance.json"]:
+        metadata_path = ckpt_path.parent / metadata_name
+        if metadata_path.exists():
+            with open(metadata_path) as f:
+                run_config |= json.load(f)
+
+    training_config = ckpt.get("training_config", {})
+    label_names = (
+        ckpt.get("label_names")
+        or training_config.get("label_names")
+        or run_config.get("label_names")
+    )
+    if label_names is None:
+        label_dim = int(model_config["label_dim"])
+        if label_dim == 3:
+            label_names = ["switch_on", "button_on", "drawer_open"]
+        elif label_dim == len(LABEL_NAMES):
+            label_names = list(LABEL_NAMES)
+        else:
+            raise ValueError(f"Could not infer label names for automaton label_dim={label_dim}")
+    label_names = list(label_names)
+    if len(label_names) != int(model_config["label_dim"]):
+        raise ValueError(
+            f"Checkpoint label_names has length {len(label_names)}, "
+            f"but model label_dim is {model_config['label_dim']}"
+        )
+
+    label_thresholds = (
+        ckpt.get("label_thresholds")
+        or training_config.get("label_thresholds")
+        or run_config.get("label_thresholds")
+    )
+
     model = AutomatonMLP(**model_config).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
@@ -261,7 +296,9 @@ def automaton_model_for_eval(model_or_run_path: Path | str, device):
         "ckpt_path": str(ckpt_path),
         "run_dir": str(ckpt_path.parent),
         "model_config": model_config,
-        "label_names": ckpt.get("label_names", LABEL_NAMES),
+        "label_names": label_names,
+        "label_thresholds": label_thresholds,
+        "target_index_mapping": {idx: name for idx, name in enumerate(label_names)},
     }
     return model, stats, meta
 
