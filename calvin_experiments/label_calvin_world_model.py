@@ -190,6 +190,46 @@ def horizon_eventual_labels(labels, next_labels, action_horizon):
     return targets
 
 
+TARGET_RULE_DESCRIPTIONS = {
+    "max_next": "max(next_changed_labels[t:t+H+1])",
+    "next_tH": "next_changed_labels[t+H]",
+}
+
+
+def normalize_target_rule(target_rule):
+    """Accept current short names and older saved provenance descriptions."""
+    if target_rule in TARGET_RULE_DESCRIPTIONS:
+        return target_rule
+    if target_rule == TARGET_RULE_DESCRIPTIONS["max_next"]:
+        return "max_next"
+    if target_rule == TARGET_RULE_DESCRIPTIONS["next_tH"]:
+        return "next_tH"
+    raise ValueError(
+        f"Unknown target_rule {target_rule!r}. "
+        f"Expected one of {sorted(TARGET_RULE_DESCRIPTIONS)}."
+    )
+
+
+def horizon_targets(labels, next_labels, action_horizon, target_rule="max_next"):
+    """Build H-step chunk targets according to the requested ablation rule."""
+    target_rule = normalize_target_rule(target_rule)
+    if target_rule == "max_next":
+        return horizon_eventual_labels(labels, next_labels, action_horizon)
+
+    labels = np.asarray(labels, dtype=np.float32)
+    next_labels = np.asarray(next_labels, dtype=np.float32)
+    action_horizon = int(action_horizon)
+    if len(labels) != len(next_labels):
+        raise ValueError("labels and next_labels must have the same length")
+    if action_horizon <= 0:
+        raise ValueError("action_horizon must be positive")
+
+    n_chunks = len(labels) - action_horizon
+    if n_chunks <= 0:
+        return np.empty((0, labels.shape[-1]), dtype=np.float32)
+    return next_labels[action_horizon:].astype(np.float32)
+
+
 def build_labelled_calvin_trajectories(hdf5_path, mask=None, max_demos=None):
     demo_keys = get_demo_keys(hdf5_path, mask=mask)
     if max_demos is not None:

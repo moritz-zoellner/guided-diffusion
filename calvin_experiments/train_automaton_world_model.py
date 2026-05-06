@@ -19,7 +19,8 @@ try:
     from label_calvin_world_model import (
         LABEL_NAMES,
         LABEL_THRESHOLDS,
-        horizon_eventual_labels,
+        TARGET_RULE_DESCRIPTIONS,
+        horizon_targets,
         label_scene_states,
         next_changed_labels,
     )
@@ -27,7 +28,8 @@ except ModuleNotFoundError:
     from calvin_experiments.label_calvin_world_model import (
         LABEL_NAMES,
         LABEL_THRESHOLDS,
-        horizon_eventual_labels,
+        TARGET_RULE_DESCRIPTIONS,
+        horizon_targets,
         label_scene_states,
         next_changed_labels,
     )
@@ -101,7 +103,7 @@ def split_trajectories(trajectories, val_ratio, seed):
     return train, val
 
 
-def flatten_trajectories(trajectories, action_horizon):
+def flatten_trajectories(trajectories, action_horizon, target_rule="max_next"):
     flat = {key: [] for key in ["states", "actions", "labels", "next_labels"]}
 
     for traj in trajectories:
@@ -115,7 +117,7 @@ def flatten_trajectories(trajectories, action_horizon):
             axis=0,
         ).reshape(n_chunks, -1)
 
-        targets = horizon_eventual_labels(traj["labels"], traj["next_labels"], action_horizon)
+        targets = horizon_targets(traj["labels"], traj["next_labels"], action_horizon, target_rule)
         if len(targets) != n_chunks:
             raise ValueError(
                 f"{traj['demo_id']}: expected {n_chunks} horizon targets, got {len(targets)}"
@@ -258,7 +260,7 @@ def evaluate(model, loader, loss_fn, device):
 def make_run_dir(args):
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_name = (
-        f"h{args.action_horizon}_sh{args.state_hidden}_ah{args.action_hidden}_"
+        f"h{args.action_horizon}_{args.target_rule}_sh{args.state_hidden}_ah{args.action_hidden}_"
         f"lh{args.label_hidden}_hh{args.head_hidden}_lr{args.lr:g}_"
         f"epochs{args.epochs}_{timestamp}"
     )
@@ -307,6 +309,12 @@ def main():
     parser.add_argument("--dropout", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--split-seed", type=int, default=42)
+    parser.add_argument(
+        "--target-rule",
+        choices=sorted(TARGET_RULE_DESCRIPTIONS),
+        default="max_next",
+        help="How to turn per-state next_changed_labels into H-step chunk targets.",
+    )
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -328,8 +336,8 @@ def main():
         trajectories = build_calvin_trajectories(args.dataset, all_keys)
         train_trajectories, val_trajectories = split_trajectories(trajectories, args.val_ratio, args.split_seed)
 
-    flat_train = flatten_trajectories(train_trajectories, args.action_horizon)
-    flat_val = flatten_trajectories(val_trajectories, args.action_horizon)
+    flat_train = flatten_trajectories(train_trajectories, args.action_horizon, args.target_rule)
+    flat_val = flatten_trajectories(val_trajectories, args.action_horizon, args.target_rule)
     stats = normalization_stats(flat_train)
 
     train_dataset = AutomatonDataset(flat_train, stats)
@@ -405,7 +413,8 @@ def main():
         "label_source": "obs/states",
         "label_names": LABEL_NAMES,
         "label_thresholds": LABEL_THRESHOLDS,
-        "target_rule": "max(next_changed_labels[t:t+H+1])",
+        "target_rule": args.target_rule,
+        "target_rule_description": TARGET_RULE_DESCRIPTIONS[args.target_rule],
         "train_demos": [{"path": str(traj["path"]), "demo_id": traj["demo_id"]} for traj in train_trajectories],
         "val_demos": [{"path": str(traj["path"]), "demo_id": traj["demo_id"]} for traj in val_trajectories],
     }
@@ -426,6 +435,7 @@ def main():
     print(f"Parameters: {train_config['num_parameters']:,}")
     print(f"Train samples: {len(train_dataset):,} | Val samples: {len(val_dataset):,}")
     print(f"Model config: {model_config}")
+    print(f"Target rule: {args.target_rule} ({TARGET_RULE_DESCRIPTIONS[args.target_rule]})")
 
     train_losses = []
     val_losses = []

@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from label_calvin_world_model import LABEL_NAMES, horizon_eventual_labels
+from label_calvin_world_model import TARGET_RULE_DESCRIPTIONS, horizon_targets, normalize_target_rule
 from train_automaton_world_model import AutomatonMLP, build_calvin_trajectories, flatten_trajectories
 
 
@@ -36,7 +36,7 @@ def _prediction_batches(model, flat, stats, batch_size, device):
     return np.concatenate(probs, axis=0)
 
 
-def _event_metadata(trajectories, action_horizon):
+def _event_metadata(trajectories, action_horizon, target_rule):
     current_labels = []
     targets = []
     rise_in_horizon = []
@@ -48,12 +48,12 @@ def _event_metadata(trajectories, action_horizon):
         if n_chunks <= 0:
             continue
 
-        horizon_targets = horizon_eventual_labels(labels, next_labels, action_horizon).astype(np.int32)
+        chunk_targets = horizon_targets(labels, next_labels, action_horizon, target_rule).astype(np.int32)
         for idx in range(n_chunks):
             window = labels[idx + 1 : idx + action_horizon + 1]
             previous = np.concatenate([labels[idx : idx + 1], labels[idx + 1 : idx + action_horizon]], axis=0)
             current_labels.append(labels[idx])
-            targets.append(horizon_targets[idx])
+            targets.append(chunk_targets[idx])
             rise_in_horizon.append(((previous == 0) & (window == 1)).any(axis=0))
 
     return {
@@ -78,9 +78,15 @@ def evaluate_run(run_dir, split, checkpoint_name, batch_size, device):
     dataset = provenance["dataset"]
     demo_keys = [demo["demo_id"] for demo in demos]
     action_horizon = int(provenance["action_horizon"])
+    target_rule = normalize_target_rule(
+        provenance.get("target_rule")
+        or provenance.get("target_rule_description")
+        or config.get("target_rule")
+        or "max_next"
+    )
     trajectories = build_calvin_trajectories(dataset, demo_keys)
-    flat = flatten_trajectories(trajectories, action_horizon)
-    metadata = _event_metadata(trajectories, action_horizon)
+    flat = flatten_trajectories(trajectories, action_horizon, target_rule)
+    metadata = _event_metadata(trajectories, action_horizon, target_rule)
 
     stats_npz = np.load(run_dir / "normalization_stats.npz")
     stats = {key: stats_npz[key] for key in stats_npz.files}
@@ -155,6 +161,8 @@ def evaluate_run(run_dir, split, checkpoint_name, batch_size, device):
         "checkpoint_epoch": int(checkpoint["epoch"]),
         "checkpoint_val_loss": float(checkpoint["val_loss"]),
         "split": split,
+        "target_rule": target_rule,
+        "target_rule_description": TARGET_RULE_DESCRIPTIONS[target_rule],
         "num_samples": int(len(probs)),
         "label_names": config["label_names"],
         "label_results": label_results,
@@ -168,6 +176,7 @@ def print_report(report):
         f"| val_loss={report['checkpoint_val_loss']:.4f}"
     )
     print(f"Split: {report['split']} | samples={report['num_samples']:,}")
+    print(f"Target rule: {report['target_rule']} ({report['target_rule_description']})")
     print("\nPer-label validation diagnostics")
     for name, result in report["label_results"].items():
         auc = "nan" if result["roc_auc"] is None else f"{result['roc_auc']:.3f}"
