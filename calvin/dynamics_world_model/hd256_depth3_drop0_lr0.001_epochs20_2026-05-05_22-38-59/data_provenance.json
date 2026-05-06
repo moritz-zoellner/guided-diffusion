@@ -1,0 +1,193 @@
+{
+  "seed": 42,
+  "split_seed": 42,
+  "split": "mask",
+  "val_ratio": 0.2,
+  "dataset": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+  "state_components": [
+    "obs/proprio",
+    "obs/states"
+  ],
+  "action_key": "actions",
+  "transition_rule": "state_t=concat(obs/proprio,obs/states)[t], action_t=actions[t], next_state=concat(...)[t+1]",
+  "train_demos": [
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_0"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_1"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_2"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_3"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_4"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_5"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_6"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_7"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_8"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_10"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_11"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_12"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_13"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_14"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_15"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_16"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_17"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_18"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_19"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_20"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_21"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_22"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_23"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_24"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_25"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_26"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_27"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_28"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_29"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_30"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_31"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_32"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_33"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_34"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_35"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_36"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_37"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_38"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_39"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_40"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_41"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_42"
+    },
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_43"
+    }
+  ],
+  "val_demos": [
+    {
+      "path": "calvin/dataset/calvin_debug_dataset/debug_data.hdf5",
+      "demo_id": "demo_9"
+    }
+  ]
+}

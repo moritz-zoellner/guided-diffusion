@@ -1,0 +1,14 @@
+epoch 001 | train 0.988894 | val 1.977374 | raw_rmse 0.226033 | zero_raw_rmse 0.226582 | best
+epoch 002 | train 0.938376 | val 1.926913 | raw_rmse 0.224679 | zero_raw_rmse 0.226582 | best
+epoch 003 | train 0.849092 | val 1.864112 | raw_rmse 0.223833 | zero_raw_rmse 0.226582 | best
+epoch 004 | train 0.754549 | val 1.806040 | raw_rmse 0.221271 | zero_raw_rmse 0.226582 | best
+epoch 005 | train 0.693932 | val 1.814111 | raw_rmse 0.223340 | zero_raw_rmse 0.226582
+epoch 006 | train 0.651489 | val 1.921857 | raw_rmse 0.223090 | zero_raw_rmse 0.226582
+epoch 007 | train 0.617904 | val 2.219774 | raw_rmse 0.224534 | zero_raw_rmse 0.226582
+epoch 008 | train 0.585291 | val 2.391753 | raw_rmse 0.220162 | zero_raw_rmse 0.226582
+epoch 009 | train 0.553966 | val 2.695437 | raw_rmse 0.218584 | zero_raw_rmse 0.226582
+epoch 010 | train 0.525450 | val 3.138328 | raw_rmse 0.223092 | zero_raw_rmse 0.226582
+epoch 011 | train 0.494338 | val 3.627830 | raw_rmse 0.219129 | zero_raw_rmse 0.226582
+epoch 012 | train 0.465183 | val 4.062983 | raw_rmse 0.219067 | zero_raw_rmse 0.226582
+epoch 013 | train 0.439945 | val 4.785149 | raw_rmse 0.218789 | zero_raw_rmse 0.226582
+epoch 014 | train 0.416802 | val 4.964275 | raw_rmse 0.220610 | zero_raw_rmse 0.226582
