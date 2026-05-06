@@ -188,10 +188,7 @@ class FlowerAttention(nn.Module):
         if self.use_rope:
             q, k = apply_rotary_pos_emb(q, k, self.cos, self.sin)
         # Build causal mask if needed.
-        if is_causal and custom_attn_mask is None:
-            mask = torch.triu(torch.ones(T, T, dtype=torch.bool, device=x.device), diagonal=1)
-            mask = mask.unsqueeze(0).unsqueeze(0)
-        elif custom_attn_mask is not None:
+        if custom_attn_mask is not None:
             mask = custom_attn_mask.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
         else:
             mask = None
@@ -583,4 +580,3 @@ class ZeroEncoder(nn.Module):
     def forward(self, x):
         return torch.zeros((x.shape[0], self.dit_dim), device=self.device)
     
-
