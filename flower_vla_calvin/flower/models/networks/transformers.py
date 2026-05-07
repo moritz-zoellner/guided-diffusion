@@ -10,6 +10,34 @@ from timm.models.vision_transformer import RmsNorm
 # Utility Functions
 ###############################################################################
 
+def flower_scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, scale=None, is_causal=False):
+    """Use PyTorch 2 SDPA when present, otherwise fall back for the older calvin env torch."""
+    if hasattr(F, "scaled_dot_product_attention"):
+        return F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            dropout_p=dropout_p,
+            scale=scale,
+            is_causal=is_causal,
+        )
+
+    scale = q.shape[-1] ** -0.5 if scale is None else scale
+    scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+    if is_causal:
+        q_len, k_len = scores.shape[-2:]
+        causal_mask = torch.ones(q_len, k_len, dtype=torch.bool, device=scores.device).tril(diagonal=k_len - q_len)
+        scores = scores.masked_fill(~causal_mask, torch.finfo(scores.dtype).min)
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            scores = scores.masked_fill(~attn_mask, torch.finfo(scores.dtype).min)
+        else:
+            scores = scores + attn_mask
+    attn = torch.softmax(scores, dim=-1)
+    attn = F.dropout(attn, p=dropout_p, training=dropout_p > 0)
+    return torch.matmul(attn, v)
+
 def find_multiple(n: int, k: int) -> int:
     """
     Returns the smallest number greater than or equal to n that is a multiple of k.
@@ -193,7 +221,7 @@ class FlowerAttention(nn.Module):
         else:
             mask = None
         # Use PyTorch's built-in scaled dot-product attention.
-        attn_output = F.scaled_dot_product_attention(
+        attn_output = flower_scaled_dot_product_attention(
             q, k, v,
             attn_mask=None if mask is None else ~mask,
             dropout_p=self.attn_dropout.p if self.training else 0.0,
@@ -284,7 +312,7 @@ class FlowerCrossAttention(nn.Module):
             # First resh ape the mask to match q's sequence length
             mask = custom_attn_mask.unsqueeze(1).unsqueeze(2)  # [32, 1, 1, 101]
             mask = mask.expand(-1, self.n_heads, q.size(2), -1)  # [32, 16, 10, 101]
-            attn_output = F.scaled_dot_product_attention(
+            attn_output = flower_scaled_dot_product_attention(
                 q, k, v,
                 attn_mask=mask,
                 dropout_p=self.attn_dropout.p if self.training else 0.0,
@@ -292,7 +320,7 @@ class FlowerCrossAttention(nn.Module):
                 is_causal=False
             )
         else:
-            attn_output = F.scaled_dot_product_attention(
+            attn_output = flower_scaled_dot_product_attention(
                 q, k, v,
                 dropout_p=self.attn_dropout.p if self.training else 0.0,
                 scale=self.scale,
