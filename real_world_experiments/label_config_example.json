@@ -1,0 +1,14 @@
+{
+  "bowl": {
+    "left_center_xy": [-0.18, 0.35],
+    "right_center_xy": [0.18, 0.35],
+    "radius": 0.09
+  },
+  "pour_rzz_on": -0.05,
+  "pour_rzz_off": 0.02,
+  "release_gripper_width": 0.055,
+  "release_table_z": 0.08,
+  "release_table_z_margin": 0.025,
+  "debounce_steps": 3
+}
+
