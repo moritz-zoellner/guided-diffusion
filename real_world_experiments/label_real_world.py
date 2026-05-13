@@ -37,7 +37,7 @@ class LabelConfig:
     bowl: BowlConfig = BowlConfig()
     pour_rzz_on: float = -0.05
     pour_rzz_off: float = 0.02
-    release_gripper_width: float = 0.055
+    release_gripper_width: float = 100.0
     release_table_z: float = 0.08
     release_table_z_margin: float = 0.025
     debounce_steps: int = 3
@@ -214,4 +214,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
