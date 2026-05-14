@@ -1,13 +1,7 @@
 {
-  "bowl": {
-    "left_center_xy": [-0.18, 0.35],
-    "right_center_xy": [0.18, 0.35],
-    "radius": 0.09
-  },
-  "pour_rzz_on": -0.05,
-  "pour_rzz_off": 0.02,
-  "release_gripper_width": 100.0,
-  "release_table_z": 0.08,
-  "release_table_z_margin": 0.025,
+  "gripper_closed_threshold": 128.5,
+  "pour_twist_on_deg": 90.0,
+  "pour_twist_off_deg": 75.0,
+  "positive_twist_is_right": true,
   "debounce_steps": 3
 }

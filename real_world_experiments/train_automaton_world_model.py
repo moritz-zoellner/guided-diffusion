@@ -61,8 +61,7 @@ def build_automaton_trajectories(hdf5_path, demo_keys, state_keys, action_key, l
             labels_all = label_demo(
                 demo,
                 config=label_config,
-                cheezit_pos_key=label_keys["cheezit_pos_key"],
-                cheezit_rot_key=label_keys["cheezit_rot_key"],
+                eef_quat_key=label_keys["eef_quat_key"],
                 gripper_width_key=label_keys["gripper_width_key"],
             )
             if not (len(states_all) == len(actions_all) == len(labels_all)):
@@ -253,8 +252,7 @@ def main():
     parser.add_argument("--state-keys", default=",".join(DEFAULT_STATE_KEYS))
     parser.add_argument("--action-key", default=DEFAULT_ACTION_KEY)
     parser.add_argument("--label-config", type=Path, default=None)
-    parser.add_argument("--cheezit-pos-key", default="cheezit_pos")
-    parser.add_argument("--cheezit-rot-key", default="cheezit_rot6d")
+    parser.add_argument("--eef-quat-key", default="eef_quat_wxyz")
     parser.add_argument("--gripper-width-key", default="gripper_width")
     parser.add_argument("--split", choices=["mask", "random"], default="mask")
     parser.add_argument("--train-mask", default="train")
@@ -281,8 +279,7 @@ def main():
     state_keys = parse_key_list(args.state_keys)
     label_config = load_label_config(args.label_config)
     label_keys = {
-        "cheezit_pos_key": args.cheezit_pos_key,
-        "cheezit_rot_key": args.cheezit_rot_key,
+        "eef_quat_key": args.eef_quat_key,
         "gripper_width_key": args.gripper_width_key,
     }
     all_keys = get_demo_keys(args.dataset)
@@ -465,4 +462,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

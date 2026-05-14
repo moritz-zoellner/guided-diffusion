@@ -11,35 +11,36 @@ import argparse
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Sequence
-
 import h5py
 import numpy as np
 
 try:
-    from real_world_data import get_demo_keys, read_obs_array, rotation_zz_from_rot6d
+    from real_world_data import (
+        get_demo_keys,
+        quat_wxyz_conjugate,
+        quat_wxyz_multiply,
+        quat_wxyz_to_rotvec,
+        read_obs_array,
+    )
 except ModuleNotFoundError:
-    from real_world_experiments.real_world_data import get_demo_keys, read_obs_array, rotation_zz_from_rot6d
+    from real_world_experiments.real_world_data import (
+        get_demo_keys,
+        quat_wxyz_conjugate,
+        quat_wxyz_multiply,
+        quat_wxyz_to_rotvec,
+        read_obs_array,
+    )
 
 
-LABEL_NAMES = ["pour_left_bowl", "pour_right_bowl", "cheezits_released"]
-
-
-@dataclass(frozen=True)
-class BowlConfig:
-    left_center_xy: tuple[float, float] = (-0.18, 0.35)
-    right_center_xy: tuple[float, float] = (0.18, 0.35)
-    radius: float = 0.09
+LABEL_NAMES = ["can_grabbed", "pouring_right", "pouring_left"]
 
 
 @dataclass(frozen=True)
 class LabelConfig:
-    bowl: BowlConfig = BowlConfig()
-    pour_rzz_on: float = -0.05
-    pour_rzz_off: float = 0.02
-    release_gripper_width: float = 100.0
-    release_table_z: float = 0.08
-    release_table_z_margin: float = 0.025
+    gripper_closed_threshold: float = 128.5
+    pour_twist_on_deg: float = 90.0
+    pour_twist_off_deg: float = 75.0
+    positive_twist_is_right: bool = True
     debounce_steps: int = 3
 
 
@@ -47,8 +48,9 @@ def load_label_config(path: Path | str | None) -> LabelConfig:
     if path is None:
         return LabelConfig()
     payload = json.loads(Path(path).read_text())
-    bowl_payload = payload.pop("bowl", {})
-    return LabelConfig(bowl=BowlConfig(**bowl_payload), **payload)
+    known_fields = set(LabelConfig.__dataclass_fields__)
+    payload = {key: value for key, value in payload.items() if key in known_fields}
+    return LabelConfig(**payload)
 
 
 def _debounce_binary(values: np.ndarray, steps: int) -> np.ndarray:
@@ -76,51 +78,68 @@ def _hysteresis_less_than(values: np.ndarray, on_threshold: float, off_threshold
     return out
 
 
-def _inside_bowl_xy(positions: np.ndarray, center_xy: Sequence[float], radius: float) -> np.ndarray:
-    center = np.asarray(center_xy, dtype=np.float32)
-    dist = np.linalg.norm(positions[:, :2] - center[None, :], axis=-1)
-    return dist <= float(radius)
+def _hysteresis_greater_than(values: np.ndarray, on_threshold: float, off_threshold: float) -> np.ndarray:
+    active = False
+    out = np.zeros(len(values), dtype=bool)
+    for idx, value in enumerate(values):
+        if active:
+            active = value > off_threshold
+        else:
+            active = value > on_threshold
+        out[idx] = active
+    return out
 
 
 def label_arrays(
-    cheezit_pos: np.ndarray,
-    cheezit_rot6d: np.ndarray,
+    eef_quat_wxyz: np.ndarray,
     gripper_width: np.ndarray,
     config: LabelConfig | None = None,
 ) -> np.ndarray:
-    """Return [pour_left, pour_right, released] labels for every timestep."""
+    """Return [can_grabbed, pouring_right, pouring_left] labels for every timestep.
+
+    Pouring labels use the relative twist of the gripper around its local z axis
+    from the start pose of each trajectory:
+
+        q_t = q_start * q_delta_local
+
+    so positive / negative ``rotvec_z(q_delta_local)`` correspond to the two
+    repeatable wrist-twist directions used to pour into the two bowls.
+    """
     config = LabelConfig() if config is None else config
-    cheezit_pos = np.asarray(cheezit_pos, dtype=np.float32)
-    cheezit_rot6d = np.asarray(cheezit_rot6d, dtype=np.float32)
-    gripper_width = np.asarray(gripper_width, dtype=np.float32).reshape(len(cheezit_pos), -1)[:, 0]
+    eef_quat_wxyz = np.asarray(eef_quat_wxyz, dtype=np.float32)
+    gripper_width = np.asarray(gripper_width, dtype=np.float32).reshape(len(eef_quat_wxyz), -1)[:, 0]
 
-    rzz = rotation_zz_from_rot6d(cheezit_rot6d)
-    tilted = _hysteresis_less_than(rzz, config.pour_rzz_on, config.pour_rzz_off)
-    left_region = _inside_bowl_xy(cheezit_pos, config.bowl.left_center_xy, config.bowl.radius)
-    right_region = _inside_bowl_xy(cheezit_pos, config.bowl.right_center_xy, config.bowl.radius)
+    q_start = np.repeat(eef_quat_wxyz[:1], len(eef_quat_wxyz), axis=0)
+    q_delta_local = quat_wxyz_multiply(quat_wxyz_conjugate(q_start), eef_quat_wxyz)
+    local_twist = quat_wxyz_to_rotvec(q_delta_local)[:, 2]
 
-    pour_left = _debounce_binary(tilted & left_region, config.debounce_steps)
-    pour_right = _debounce_binary(tilted & right_region, config.debounce_steps)
+    on = np.deg2rad(float(config.pour_twist_on_deg))
+    off = np.deg2rad(float(config.pour_twist_off_deg))
+    positive_twist = _hysteresis_greater_than(local_twist, on, off)
+    negative_twist = _hysteresis_less_than(local_twist, -on, -off)
 
-    released_raw = (
-        (gripper_width >= float(config.release_gripper_width))
-        & (cheezit_pos[:, 2] <= float(config.release_table_z + config.release_table_z_margin))
-    )
-    released = _debounce_binary(released_raw, config.debounce_steps)
+    grabbed_raw = gripper_width >= float(config.gripper_closed_threshold)
+    grabbed = _debounce_binary(grabbed_raw, config.debounce_steps)
+    positive_pour = _debounce_binary(grabbed_raw & positive_twist, config.debounce_steps)
+    negative_pour = _debounce_binary(grabbed_raw & negative_twist, config.debounce_steps)
 
-    return np.stack([pour_left, pour_right, released], axis=-1).astype(np.float32)
+    if config.positive_twist_is_right:
+        pouring_right, pouring_left = positive_pour, negative_pour
+    else:
+        pouring_right, pouring_left = negative_pour, positive_pour
+
+    return np.stack([grabbed, pouring_right, pouring_left], axis=-1).astype(np.float32)
 
 
 def label_demo(
     demo: h5py.Group,
     config: LabelConfig | None = None,
-    cheezit_pos_key: str = "cheezit_pos",
-    cheezit_rot_key: str = "cheezit_rot6d",
+    eef_quat_key: str = "eef_quat_wxyz",
     gripper_width_key: str = "gripper_width",
+    **_: object,
 ) -> np.ndarray:
     return label_arrays(
-        read_obs_array(demo, cheezit_pos_key),
-        read_obs_array(demo, cheezit_rot_key),
+        read_obs_array(demo, eef_quat_key),
         read_obs_array(demo, gripper_width_key),
         config=config,
     )
@@ -187,8 +206,7 @@ def write_label_diagnostics(args):
             labels = label_demo(
                 f[f"data/{key}"],
                 config=config,
-                cheezit_pos_key=args.cheezit_pos_key,
-                cheezit_rot_key=args.cheezit_rot_key,
+                eef_quat_key=args.eef_quat_key,
                 gripper_width_key=args.gripper_width_key,
             )
             summary["demos"][key] = {
@@ -205,8 +223,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("outputs/real_world/label_diagnostics.json"))
     parser.add_argument("--mask", default=None)
     parser.add_argument("--label-config", type=Path, default=None)
-    parser.add_argument("--cheezit-pos-key", default="cheezit_pos")
-    parser.add_argument("--cheezit-rot-key", default="cheezit_rot6d")
+    parser.add_argument("--eef-quat-key", default="eef_quat_wxyz")
     parser.add_argument("--gripper-width-key", default="gripper_width")
     args = parser.parse_args()
     write_label_diagnostics(args)
