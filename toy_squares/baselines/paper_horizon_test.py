@@ -47,6 +47,16 @@ from toy_squares.toy_squares_utils import early_decision_cube_setup, load_automa
 # diffusion policy and the LTLDoG-S baseline. The output tree is:
 # paper_test/horizon_XX_<chain>/{ours,ltldog}/...
 #
+# The comparison deliberately preserves each method's natural control surface:
+#   - Ours is an 8-action Diffusion Policy, so it samples/guides one executable
+#     action chunk at a time and replans after each reached symbolic stage.
+#   - LTLDoG is a full-trajectory Diffuser baseline, so it samples/guides one
+#     H-step state-action trajectory and executes the generated actions once.
+#
+# The main paper result folder uses the defaults in PaperTestConfig below. If
+# you rerun the script without overrides, it targets main_result_LTLDOG and will
+# reuse existing rollout folders unless overwrite_existing_rollouts is enabled.
+#
 #######
 
 
@@ -61,38 +71,48 @@ BLOCK_COLORS = ["#0a84ff", "#ff3b30", "#34c759", "#ffd60a"]
 
 @dataclass
 class PaperTestConfig:
-    output_dir: str = "outputs/toy_squares_rollouts/baseline_ltldog/rollouts/paper_test"
+    # Output root for the final paper-style horizon scaling experiment.
+    output_dir: str = "outputs/toy_squares_rollouts/baseline_ltldog/rollouts/paper_test/main_result_LTLDOG"
+
+    # Our trained 8-action Diffusion Policy checkpoint and learned automaton
+    # world model. OursRunner uses both: DP proposes action chunks, automaton
+    # gradients steer each chunk toward the current symbolic subgoal.
     dp_checkpoint: str = "/home/moritz/data/diffusion_runs/toy_squares_dp_n500/20260422190540/models/model_epoch_320_best_validation_0.005075077305082232.pth"
     automaton_run_dir: str = "outputs/automaton_world_model/training-run_2026-04-28_17-52-27"
+
+    # LTLDoG full-trajectory Diffuser checkpoint. It predicts H-step
+    # state-action trajectories directly and is guided with differentiable LTL
+    # robustness during reverse diffusion.
     ltldog_checkpoint: str = "outputs/toy_squares_rollouts/baseline_ltldog/training/h128_full_diffuser_train3000_cpu_full/best.pt"
     n_rollouts: int = 20
     env_horizon: int = 128
-    max_ltl_horizon: int = 4
+    max_ltl_horizon: int = 5
     seed_start: int = 0
-    deterministic_setup: bool = False
+    deterministic_setup: bool = True
     methods: str = "ours,ltldog"
     append_existing_aggregate: bool = True
     overwrite_existing_rollouts: bool = False
-    stop_ltldog_success_at: float = 0.05
+    stop_ltldog_success_at: float = -1.0
     stop_after_horizon: int = 2
     radius: float = 0.2
     ours_guidance_steps: int = 10
     ours_step_size: float = 3e-4
+
+    # Final LTLDoG tuning we settled on for the compact deterministic paper
+    # result: posterior-sampling guidance, low smooth-min tau, moderate scale,
+    # and enough guide steps to make imagined satisfaction nontrivial.
     ltldog_batch_size: int = 4
-    ltldog_guidance_scale: float = 0.01
-    ltldog_n_guide_steps: int = 5
+    ltldog_guidance_scale: float = 0.10
+    ltldog_n_guide_steps: int = 20
     ltldog_t_stopgrad: int = 2
     ltldog_diffusion_steps: int = 100
     ltldog_guidance_mode: str = "ps"
     ltldog_scale_grad_by_std: bool = False
-    ltldog_tau: float = 0.05
+    ltldog_tau: float = 0.001
     ltldog_freeze_static_blocks: bool = False
-    ltldog_execution_mode: str = "chunked"
-    ltldog_action_source: str = "actions"
-    ltldog_replan_chunk: int = 8
-    ltldog_method_name: str = "ltldog"
-    chain_base: str = "blue,red,yellow,green"
-    setup_variant: str = "early"
+    ltldog_method_name: str = "ltldog_h128_compact_full_exec_tau0p001_scale0p10_g20"
+    chain_base: str = "blue,yellow,green,red"
+    setup_variant: str = "compact_deterministic"
     compact_block_scale: float = 0.55
 
 
@@ -118,6 +138,10 @@ def chain_tag(chain: Sequence[str]) -> str:
 
 
 def rollout_setup_state(config: PaperTestConfig) -> np.ndarray:
+    # All paper rollouts should start from the same early-decision layout logic.
+    # The compact variants scale block coordinates toward the board center,
+    # making the horizon-prefix task visually cleaner without changing the
+    # state representation or action interface.
     setup_state = to_numpy(early_decision_cube_setup(deterministic=config.deterministic_setup)).copy()
     variant = str(config.setup_variant).strip().lower()
     if variant in {"early", "early_decision"}:
@@ -185,6 +209,8 @@ def flat_state_from_low_level(obs: Dict[str, np.ndarray]) -> np.ndarray:
 
 
 def reached_label_from_state(state: np.ndarray, label_name: str, radius: float) -> Tuple[bool, float]:
+    # This is the hard satisfaction primitive used for rollout success. The
+    # same radius appears in LTLDoG robustness, automaton labels, and plots.
     block_idx = STATE_BLOCK_NAMES.index(label_name)
     agent = state[0:2]
     block = state[2 + 2 * block_idx : 4 + 2 * block_idx]
@@ -220,6 +246,8 @@ def jsonable(value):
 
 class OursRunner:
     def __init__(self, config: PaperTestConfig):
+        # OursRunner owns the robomimic DP policy, the TouchCube environment,
+        # and the learned automaton model used for gradient guidance.
         self.config = config
         self.device = TorchUtils.get_torch_device(try_to_use_cuda=True)
         self.policy, ckpt_dict = FileUtils.policy_from_checkpoint(
@@ -257,6 +285,10 @@ class OursRunner:
         return torch.cat([self._latest_obs_tensor(obs_dict, "agent_pos"), self._latest_obs_tensor(obs_dict, "states")], dim=-1)
 
     def _automaton_label_from_state(self, state: torch.Tensor) -> torch.Tensor:
+        # The automaton model expects label order:
+        # [at_green, at_blue, at_red, at_yellow].
+        # The env state stores blocks as [blue, red, green, yellow], so this
+        # function both detects contact and reorders to the automaton convention.
         agent = state[:, 0:2]
         cubes = state[:, 2:10].reshape(state.shape[0], 4, 2)
         distances = torch.linalg.norm(agent[:, None, :] - cubes, dim=-1)
@@ -282,6 +314,9 @@ class OursRunner:
         return torch.cat(offsets, dim=0), torch.cat(scales, dim=0)
 
     def unnormalize_action_sequence(self, action_sequence: torch.Tensor) -> torch.Tensor:
+        # Robomimic DP samples normalized actions. The env expects raw absolute
+        # agent-position actions in [-1, 1], so every generated chunk must pass
+        # through the checkpoint's action normalization stats.
         parts = self._torch_action_normalization_parts(dtype=action_sequence.dtype)
         if parts is None:
             return action_sequence
@@ -303,6 +338,8 @@ class OursRunner:
             return torch.sigmoid(logits).detach().cpu().numpy()
 
     def direct_chunk_grad(self, obs_tensor, chunk_n: torch.Tensor, target_idx: int) -> torch.Tensor:
+        # Gradient target for our method: increase the automaton logit for the
+        # current symbolic stage after executing this 8-action chunk.
         state = self._automaton_state_from_obs(obs_tensor).to(device=chunk_n.device, dtype=chunk_n.dtype)
         label = self._automaton_label_from_state(state).to(device=chunk_n.device, dtype=chunk_n.dtype)
         chunk_raw = self.unnormalize_action_sequence(chunk_n)
@@ -316,6 +353,9 @@ class OursRunner:
         return torch.autograd.grad(objective, chunk_n, retain_graph=False, create_graph=False)[0]
 
     def optimize_chunk(self, obs_tensor, base_chunk_n: torch.Tensor, target_idx: int) -> torch.Tensor:
+        # Lightweight post-sample guidance: repeatedly step the normalized
+        # action chunk in automaton-gradient direction and keep it in the DP
+        # action support via clipping.
         chunk_n = base_chunk_n.detach().clone()
         for _ in range(int(self.config.ours_guidance_steps)):
             x = chunk_n.detach().requires_grad_(True)
@@ -324,6 +364,9 @@ class OursRunner:
         return chunk_n
 
     def rollout(self, chain: Sequence[str], env_seed: int, rollout_seed: int, run_dir: Path) -> Dict:
+        # Ours executes a symbolic chain stage-by-stage. Once the current block
+        # is reached, the pending action queue is cleared and the next DP chunk
+        # is optimized for the next symbolic target.
         label_chain = [LABEL_NAME_TO_IDX[name] for name in chain]
         old_debug = getattr(self.policy.policy, "debug_guidance_actions", False)
         self.policy.policy.debug_guidance_actions = False
@@ -341,6 +384,8 @@ class OursRunner:
 
         for t in range(int(self.config.env_horizon)):
             if not action_queue:
+                # DP proposes a short action chunk; the automaton model scores
+                # the whole chunk and supplies gradients for the current target.
                 target_idx = label_chain[chain_pos]
                 obs_tensor = self.policy._prepare_observation(obs)
                 with torch.no_grad():
@@ -375,6 +420,8 @@ class OursRunner:
             target_name = chain[chain_pos]
             reached, robustness = reached_label_from_state(current_state, target_name, self.config.radius)
             if reached:
+                # Stage progress is based on real executed env state, not the
+                # automaton prediction. This is the "actual" success criterion.
                 reaches.append({"t": int(steps), "stage": int(chain_pos), "label": target_name, "robustness": float(robustness)})
                 chain_pos += 1
                 action_queue.clear()
@@ -406,11 +453,10 @@ class OursRunner:
 ########
 #
 # LTLDoG-S BASELINE
-# LTLDoG samples a full trajectory, guided by differentiable robustness over
-# the formula. In "chunked" mode this reproduces our earlier receding-horizon
-# wrapper, where only the first action chunk is executed before replanning. In
-# "full" mode this is the paper-faithful sanity check: sample once for the
-# entire horizon and execute the generated action sequence without replanning.
+# This is the paper-faithful baseline path we use in the final experiments:
+# sample one full H-step state-action trajectory with LTLDoG-S posterior
+# guidance, then execute the generated action sequence once in TouchCube.
+# There is deliberately no receding-horizon replanning in this runner.
 #
 #######
 
@@ -418,10 +464,6 @@ class OursRunner:
 class LTLDogRunner:
     def __init__(self, config: PaperTestConfig):
         self.config = config
-        if config.ltldog_execution_mode not in {"chunked", "full"}:
-            raise ValueError(f"Unknown ltldog_execution_mode: {config.ltldog_execution_mode}")
-        if config.ltldog_action_source not in {"actions", "agent_waypoints"}:
-            raise ValueError(f"Unknown ltldog_action_source: {config.ltldog_action_source}")
         self.planner: LTLDogPlanner = load_ltldog_planner(
             config.ltldog_checkpoint,
             device="auto",
@@ -429,12 +471,20 @@ class LTLDogRunner:
         )
 
     def suffix_formula(self, chain: Sequence[str], chain_pos: int) -> FormulaSpec:
+        # Kept as a small helper so single-target and ordered-prefix formulas
+        # are represented consistently. In the final full-exec path chain_pos is
+        # always zero because LTLDoG does not replan after partial progress.
         suffix = tuple(chain[chain_pos:])
         if len(suffix) == 1:
             return FormulaSpec(f"F_{suffix[0]}", "eventually", suffix, f"eventually visit {suffix[0]}")
         return FormulaSpec(f"seq_{'_'.join(suffix)}", "sequence", suffix, " then ".join(suffix))
 
     def rollout(self, chain: Sequence[str], env_seed: int, rollout_seed: int, run_dir: Path) -> Dict:
+        # LTLDoG full-exec rollout:
+        #   1. Reset the env to the paper layout.
+        #   2. Sample one guided full-H trajectory for the complete formula.
+        #   3. Execute predicted actions open-loop in the real env.
+        #   4. Judge progress using the real env state sequence.
         reseed(env_seed)
         setup_state = rollout_setup_state(self.config)
         reseed(rollout_seed)
@@ -447,80 +497,62 @@ class LTLDogRunner:
         actions, rewards, contacts, records, reaches = [], [], [], [], []
         chain_pos = 0
         steps = 0
-        predicted_first = None
+        formula = self.suffix_formula(chain, 0)
+        samples, values = self.planner.sample_plan(
+            current_obs,
+            formula,
+            batch_size=self.config.ltldog_batch_size,
+            guidance_scale=self.config.ltldog_guidance_scale,
+            n_guide_steps=self.config.ltldog_n_guide_steps,
+            t_stopgrad=self.config.ltldog_t_stopgrad,
+            guidance_mode=self.config.ltldog_guidance_mode,
+            scale_grad_by_std=self.config.ltldog_scale_grad_by_std,
+            radius=self.config.radius,
+            tau=self.config.ltldog_tau,
+            freeze_static_blocks=self.config.ltldog_freeze_static_blocks,
+        )
+        predicted_first = samples[0].copy()
+        # Store the guide metadata before execution. Diagnostics later compare
+        # this imagined trajectory against the real executed one.
+        current_state = flat_state_from_low_level(obs_snapshot(obs))
+        records.append(
+            {
+                "t": int(steps),
+                "stage": int(chain_pos),
+                "target": chain[chain_pos],
+                "remaining_chain": list(chain),
+                "guide_value": float(values[0]),
+                "execution_mode": "full",
+                "tau": float(self.config.ltldog_tau),
+                "freeze_static_blocks": bool(self.config.ltldog_freeze_static_blocks),
+                "action_source": "actions",
+                "robustness_by_block": labels_from_state(current_state, self.config.radius),
+            }
+        )
 
-        while steps < int(self.config.env_horizon) and chain_pos < len(chain):
-            formula = self.suffix_formula(chain, chain_pos)
-            samples, values = self.planner.sample_plan(
-                current_obs,
-                formula,
-                batch_size=self.config.ltldog_batch_size,
-                guidance_scale=self.config.ltldog_guidance_scale,
-                n_guide_steps=self.config.ltldog_n_guide_steps,
-                t_stopgrad=self.config.ltldog_t_stopgrad,
-                guidance_mode=self.config.ltldog_guidance_mode,
-                scale_grad_by_std=self.config.ltldog_scale_grad_by_std,
-                radius=self.config.radius,
-                tau=self.config.ltldog_tau,
-                freeze_static_blocks=self.config.ltldog_freeze_static_blocks,
-            )
-            sample = samples[0]
-            if predicted_first is None:
-                predicted_first = sample.copy()
+        action_sequence = predicted_first[: int(self.config.env_horizon), :ACTION_DIM]
+        for action in action_sequence:
+            # The generated action channel is already in env action coordinates;
+            # clipping only protects against rare diffusion overshoot.
+            action = np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+            obs, reward, _done, info = env.step(action)
+            current_obs = obs_from_env_dict(obs)
+            low_level_obs.append(obs_snapshot(obs))
+            actions.append(action.copy())
+            rewards.append(float(reward))
+            contacts.append(int(info.get("cube_contacted", -1)))
+            steps += 1
             current_state = flat_state_from_low_level(obs_snapshot(obs))
-            records.append(
-                {
-                    "t": int(steps),
-                    "stage": int(chain_pos),
-                    "target": chain[chain_pos],
-                    "remaining_chain": list(chain[chain_pos:]),
-                    "guide_value": float(values[0]),
-                    "execution_mode": self.config.ltldog_execution_mode,
-                    "tau": float(self.config.ltldog_tau),
-                    "freeze_static_blocks": bool(self.config.ltldog_freeze_static_blocks),
-                    "action_source": self.config.ltldog_action_source,
-                    "robustness_by_block": labels_from_state(current_state, self.config.radius),
-                }
-            )
-
-            if self.config.ltldog_execution_mode == "full":
-                n_actions = int(self.config.env_horizon) - steps
-            else:
-                n_actions = int(self.config.ltldog_replan_chunk)
-
-            if self.config.ltldog_action_source == "actions":
-                action_sequence = sample[:n_actions, :2]
-            else:
-                # The upstream Maze2D LTLDoG eval samples once and tracks the
-                # generated state trajectory with a controller. Toy Squares
-                # actions are normalized desired agent positions, so sampled
-                # next-agent positions are the closest matching controller.
-                planned_agent = sample[:, ACTION_DIM : ACTION_DIM + 2]
-                action_sequence = planned_agent[1 : n_actions + 1] if len(planned_agent) > 1 else planned_agent[:n_actions]
-                if len(action_sequence) < n_actions and len(action_sequence):
-                    pad = np.repeat(action_sequence[-1:], n_actions - len(action_sequence), axis=0)
-                    action_sequence = np.concatenate([action_sequence, pad], axis=0)
-
-            for action in action_sequence:
-                action = np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
-                obs, reward, _done, info = env.step(action)
-                current_obs = obs_from_env_dict(obs)
-                low_level_obs.append(obs_snapshot(obs))
-                actions.append(action.copy())
-                rewards.append(float(reward))
-                contacts.append(int(info.get("cube_contacted", -1)))
-                steps += 1
-                current_state = flat_state_from_low_level(obs_snapshot(obs))
+            if chain_pos < len(chain):
+                # Even though LTLDoG does not replan, we still track how many
+                # ordered stages the actual executed trajectory completed.
                 reached, robustness = reached_label_from_state(current_state, chain[chain_pos], self.config.radius)
                 if reached:
                     reaches.append({"t": int(steps), "stage": int(chain_pos), "label": chain[chain_pos], "robustness": float(robustness)})
                     chain_pos += 1
-                    if chain_pos >= len(chain) or self.config.ltldog_execution_mode == "chunked":
+                    if chain_pos >= len(chain):
                         break
-                if steps >= int(self.config.env_horizon) or float(reward) < 0.0:
-                    break
-
-            if self.config.ltldog_execution_mode == "full":
+            if steps >= int(self.config.env_horizon) or float(reward) < 0.0:
                 break
 
         complete = chain_pos >= len(chain)
@@ -528,8 +560,8 @@ class LTLDogRunner:
         result = {
             "method": self.config.ltldog_method_name,
             "ltldog_base_method": "ltldog",
-            "ltldog_execution_mode": self.config.ltldog_execution_mode,
-            "ltldog_action_source": self.config.ltldog_action_source,
+            "ltldog_execution_mode": "full",
+            "ltldog_action_source": "actions",
             "ltldog_tau": float(self.config.ltldog_tau),
             "ltldog_freeze_static_blocks": bool(self.config.ltldog_freeze_static_blocks),
             "chain": list(chain),
@@ -568,6 +600,11 @@ def save_rollout_artifacts(
     result: Dict,
     predicted: np.ndarray | None = None,
 ) -> None:
+    # Every rollout directory is self-contained:
+    #   setup_state.npy      raw env reset vector
+    #   low_level_obs.npz    actual env states observed during execution
+    #   trace.npz            actions, rewards, and optionally LTLDoG prediction
+    #   rollout_summary.json human-readable success/progress metadata
     run_dir.mkdir(parents=True, exist_ok=True)
     np.save(run_dir / "setup_state.npy", setup_state)
     np.savez_compressed(
@@ -593,6 +630,7 @@ def setup_blocks(setup_state: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.nd
 
 
 def load_trajectory(run_dir: Path) -> np.ndarray:
+    # Plotting uses the actual executed agent path, not predicted LTLDoG states.
     with np.load(run_dir / "low_level_obs.npz", allow_pickle=True) as data:
         agent_pos = np.asarray(data["agent_pos"])
     if agent_pos.dtype == object:
@@ -742,6 +780,8 @@ def plot_aggregate(output_dir: Path, summaries: Sequence[Dict]) -> None:
 
 
 def run_method_for_horizon(runner, method: str, chain: Sequence[str], horizon_dir: Path, config: PaperTestConfig) -> Dict:
+    # Idempotent by default. This is important because LTLDoG full-exec sampling
+    # is slow: adding H4/H5 later should reuse already-completed H1-H3 rollouts.
     method_dir = horizon_dir / method
     method_dir.mkdir(parents=True, exist_ok=True)
     method_config = asdict(config)
@@ -770,6 +810,9 @@ def run_method_for_horizon(runner, method: str, chain: Sequence[str], horizon_di
 
 
 def run_paper_test(config: PaperTestConfig) -> List[Dict]:
+    # Main orchestration: instantiate each method once, then sweep prefix
+    # horizons. Summaries are upserted so reruns can extend or refresh one
+    # horizon without duplicating aggregate rows.
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / "paper_test_config.json", "w", encoding="utf-8") as f:
@@ -823,7 +866,9 @@ def parse_args() -> PaperTestConfig:
     parser = argparse.ArgumentParser(description="Paper LTL horizon scaling test: ours vs LTLDoG")
     for field, value in asdict(defaults).items():
         if isinstance(value, bool):
-            parser.add_argument(f"--{field}", action="store_false" if value else "store_true", default=value)
+            parser.add_argument(f"--{field}", dest=field, action="store_true")
+            parser.add_argument(f"--no-{field}", dest=field, action="store_false")
+            parser.set_defaults(**{field: value})
         else:
             parser.add_argument(f"--{field}", type=type(value), default=value)
     return PaperTestConfig(**vars(parser.parse_args()))

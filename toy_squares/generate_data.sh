@@ -19,8 +19,9 @@ TRAIN_OUT=${TRAIN_OUT:-/home/shared/data/toy_squares/train}
 
 TRAIN_ROLLOUTS=${TRAIN_ROLLOUTS:-10000}
 HORIZON=${HORIZON:-150}
-TARGET_SEQUENCE_LENGTH=${TARGET_SEQUENCE_LENGTH:-1}
-MIN_STEPS_PER_TARGET=${MIN_STEPS_PER_TARGET:-8}
+
+# These knobs control only the scripted single-target data collector. It cycles
+# through the four block targets internally and saves successful demos to HDF5.
 POLICY_NOISE_SCALE=${POLICY_NOISE_SCALE:-0.03}
 POLICY_MAX_WAYPOINTS=${POLICY_MAX_WAYPOINTS:-1}
 DATASET_OBS_KEYS=${DATASET_OBS_KEYS:-}
@@ -36,14 +37,14 @@ if [[ -n "$VIDEO_PATH" ]]; then
   EXTRA_ARGS+=(--video_path "$VIDEO_PATH")
 fi
 
+# Keep obs in the dataset because DP, LTLDoG training, and the automaton model
+# all read obs/agent_pos and obs/states from the resulting HDF5.
 "$PYTHON_BIN" -u "$REPO_ROOT/toy_squares/collect_scripted_data_pymunk.py" \
   --dataset_path "$TRAIN_OUT/data.hdf5" \
   --dataset_obs \
   --json_path "$TRAIN_OUT/stats.json" \
   --horizon "$HORIZON" \
   --n_rollouts "$TRAIN_ROLLOUTS" \
-  --target_sequence_length "$TARGET_SEQUENCE_LENGTH" \
-  --min_steps_per_target "$MIN_STEPS_PER_TARGET" \
   --policy_noise_scale "$POLICY_NOISE_SCALE" \
   --policy_max_waypoints "$POLICY_MAX_WAYPOINTS" \
   --env_config "$REPO_ROOT/toy_squares/touchcubes.json" \

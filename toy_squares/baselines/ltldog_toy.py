@@ -8,10 +8,11 @@ import random
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 import h5py
-import imageio.v2 as imageio
 import matplotlib
 
 matplotlib.use("Agg")
@@ -22,7 +23,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ROBOMIMIC_ROOT = REPO_ROOT / "robomimic"
@@ -38,6 +38,15 @@ if str(REPO_ROOT) not in sys.path:
 # The Diffuser models full state-action trajectories. Each transition is
 # [action_x, action_y, agent_xy, blue_xy, red_xy, green_xy, yellow_xy].
 # The LTL/STL labels are derived from distances between the agent and blocks.
+#
+# Keep this layout in mind while reading the file:
+#   trajectory[:, :2]       generated env actions
+#   trajectory[:, 2:4]      generated agent position
+#   trajectory[:, 4:12]     generated block positions
+#
+# The training data comes from real TouchCube rollouts where blocks are static,
+# but the diffusion model is free to model every coordinate. Diagnostics later
+# check whether it hallucinates block motion to satisfy formulas.
 #
 #######
 
@@ -62,16 +71,23 @@ LABEL_COLORS = {
 ########
 #
 # RUN CONFIGURATION
-# TrainConfig defines the offline full-trajectory diffusion model. EvalConfig
-# defines receding-horizon LTLDoG rollouts: sample H-step plans, execute the
-# first execute_steps actions in the real env, observe, and replan.
+# TrainConfig defines the offline full-trajectory diffusion model. Evaluation
+# lives in paper_horizon_test.py so the only supported LTLDoG baseline path is
+# the paper-faithful full-trajectory rollout used in the final experiments.
 #
 #######
 
 @dataclass
 class TrainConfig:
+    # HDF5 demonstrations with obs/agent_pos, obs/states, and actions.
     data_path: str = "/home/shared/data/toy_squares/train/data.hdf5"
+
+    # Training outputs contain best.pt, final.pt, train_config.json, and loss
+    # curves. Paper rollout scripts load best.pt through ltldog_train.py.
     output_dir: str = "outputs/toy_squares_rollouts/baseline_ltldog/training/h128_full_diffuser"
+
+    # Horizon is a training-time choice for the full-trajectory Diffuser.
+    # Runtime rollouts should use a checkpoint trained for the desired H.
     horizon: int = 128
     batch_size: int = 64
     train_steps: int = 20000
@@ -88,32 +104,6 @@ class TrainConfig:
     num_workers: int = 2
     max_demos: int = 0
     min_start_gap: int = 1
-
-
-@dataclass
-class EvalConfig:
-    checkpoint: str
-    output_dir: str = "outputs/toy_squares_rollouts/baseline_ltldog/rollouts/formula_suite_dataset_resets_ps_scale0p01_g5_exec8"
-    data_path: str = "/home/shared/data/toy_squares/train/data.hdf5"
-    formulas: str = "default"
-    n_rollouts: int = 12
-    env_horizon: int = 150
-    execute_steps: int = 8
-    batch_size: int = 4
-    guidance_scale: float = 0.01
-    n_guide_steps: int = 5
-    t_stopgrad: int = 2
-    guidance_mode: str = "ps"
-    scale_grad_by_std: bool = False
-    guidance_threshold: float = 0.0
-    diffusion_steps: int = 100
-    seed: int = 11
-    device: str = "auto"
-    render_video: bool = False
-    reset_mode: str = "dataset"
-    formula_limit: int = 0
-    stop_on_contact: bool = False
-    stop_on_satisfaction: bool = True
 
 
 ########
@@ -140,16 +130,12 @@ def seed_everything(seed: int) -> None:
 
 
 def obs_from_env_dict(obs: Dict[str, np.ndarray]) -> np.ndarray:
+    # Convert robomimic's observation dict into the 10D vector used throughout
+    # LTLDoG: [agent_xy, blue_xy, red_xy, green_xy, yellow_xy].
     return np.concatenate(
         [np.asarray(obs["agent_pos"], dtype=np.float32), np.asarray(obs["states"], dtype=np.float32)],
         axis=-1,
     )
-
-
-def raw_reset_state_from_obs(obs: np.ndarray) -> np.ndarray:
-    positions = ((np.asarray(obs, dtype=np.float32) + 1.0) * 0.5 * 512.0).reshape(5, 2)
-    rotations = np.zeros(4, dtype=np.float32)
-    return np.concatenate([positions.reshape(-1), rotations], axis=0)
 
 
 ########
@@ -169,6 +155,8 @@ class ToySquaresTrajectoryDataset(Dataset):
         max_demos: int = 0,
         min_start_gap: int = 1,
     ):
+        # Store small low-dimensional episodes in memory. This keeps fixed-H
+        # window sampling simple and avoids repeated HDF5 reads during training.
         self.data_path = str(data_path)
         self.horizon = int(horizon)
         self.episodes: List[Dict[str, np.ndarray]] = []
@@ -194,6 +182,8 @@ class ToySquaresTrajectoryDataset(Dataset):
                 self.demo_keys.append(demo_key)
                 episode_idx = len(self.episodes)
                 self.episodes.append({"actions": actions, "obs": obs})
+                # Each (episode, start) pair is one possible H-step training
+                # window. min_start_gap can subsample highly overlapping windows.
                 for start in range(0, len(actions), max(1, int(min_start_gap))):
                     self.indices.append((episode_idx, start))
 
@@ -214,6 +204,8 @@ class ToySquaresTrajectoryDataset(Dataset):
         obs_window = obs[start:min(end, len(obs))]
         valid_len = len(act_window)
         if valid_len < self.horizon:
+            # Suffix windows are padded by repeating the final transition, so
+            # every batch has shape [B, H, transition_dim].
             pad = self.horizon - valid_len
             act_pad = np.repeat(act_window[-1:][..., :], pad, axis=0)
             obs_pad = np.repeat(obs_window[-1:][..., :], pad, axis=0)
@@ -222,6 +214,8 @@ class ToySquaresTrajectoryDataset(Dataset):
 
         trajectory = np.concatenate([act_window, obs_window], axis=-1)
         trajectory = np.clip(trajectory, -1.0, 1.0).astype(np.float32)
+        # The first observation is the conditioning state clamped throughout
+        # forward noising and reverse denoising.
         condition = trajectory[0, ACTION_DIM:].astype(np.float32)
         return {
             "trajectory": torch.from_numpy(trajectory),
@@ -303,6 +297,9 @@ class TemporalDenoiser(nn.Module):
         self.out = nn.Sequential(nn.GroupNorm(8, channels), nn.SiLU(), nn.Conv1d(channels, transition_dim, 5, padding=2))
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        # x is [batch, horizon, transition_dim]. Conv1d expects channels first,
+        # so we transpose to [batch, transition_dim, horizon], denoise over
+        # time, then transpose back.
         h = self.in_conv(x.transpose(1, 2))
         cond = self.time_mlp(t) + self.obs_mlp(condition)
         for block in self.blocks:
@@ -363,6 +360,9 @@ class GaussianTrajectoryDiffusion(nn.Module):
         self.register_buffer("posterior_mean_coef2", (1.0 - alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - alphas_cumprod))
 
     def apply_conditioning(self, x: torch.Tensor, condition: torch.Tensor, freeze_static_blocks: bool = False) -> torch.Tensor:
+        # The initial observation is known at rollout time, so diffusion should
+        # never be allowed to denoise it away. Conditioning is re-applied after
+        # every forward / reverse step.
         x = x.clone()
         x[:, 0, ACTION_DIM:] = condition
         if freeze_static_blocks:
@@ -390,6 +390,8 @@ class GaussianTrajectoryDiffusion(nn.Module):
         return mean, logvar
 
     def loss(self, x_start: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        # Standard DDPM noise-prediction objective. The clamped condition entries
+        # are masked out from both prediction and target noise before the MSE.
         batch_size = x_start.shape[0]
         t = torch.randint(0, self.timesteps, (batch_size,), device=x_start.device).long()
         noise = torch.randn_like(x_start)
@@ -401,6 +403,9 @@ class GaussianTrajectoryDiffusion(nn.Module):
 
     @torch.no_grad()
     def sample(self, condition: torch.Tensor, batch_size: int, guide=None, sample_kwargs=None) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Reverse diffusion. With guide=None this is unconditional trajectory
+        # sampling from the learned prior. With a ToyLTLRobustness guide, each
+        # reverse step can inject temporal-logic gradients.
         sample_kwargs = {} if sample_kwargs is None else dict(sample_kwargs)
         guidance_mode = sample_kwargs.pop("guidance_mode", "ps")
         freeze_static_blocks = bool(sample_kwargs.pop("freeze_static_blocks", False))
@@ -506,6 +511,10 @@ class GaussianTrajectoryDiffusion(nn.Module):
         threshold: float = 0.0,
         freeze_static_blocks: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Posterior-sampling guidance path. First draw the usual denoising
+        # posterior step; if that already exceeds the threshold, keep it. If
+        # not, compute robustness gradients and nudge the sampled posterior
+        # state toward higher formula satisfaction.
         model_var = extract(self.posterior_variance, t, x.shape)
         with torch.no_grad():
             eps = self.model(x, t, condition)
@@ -654,6 +663,8 @@ def cumulative_smooth_min(x: torch.Tensor, tau: float) -> torch.Tensor:
 
 @dataclass
 class FormulaSpec:
+    # Minimal formula representation for Toy Squares. We only need a handful of
+    # temporal-logic templates, so a dataclass is clearer than a parser here.
     name: str
     kind: str
     labels: Tuple[str, ...]
@@ -683,11 +694,15 @@ DEFAULT_FORMULAS = [
 
 class ToyLTLRobustness:
     def __init__(self, formula: FormulaSpec, radius: float = 0.2, tau: float = 0.05):
+        # radius defines the hard contact region. tau controls the smooth
+        # max/min temperature used while guiding diffusion.
         self.formula = formula
         self.radius = float(radius)
         self.tau = float(tau)
 
     def label_robustness(self, observations: torch.Tensor) -> Dict[str, torch.Tensor]:
+        # For each block label, return a robustness time series. Positive means
+        # the generated agent is within contact radius of that block.
         agent = observations[..., 0:2]
         out = {}
         for label, block_slice in LABEL_TO_BLOCK_SLICE.items():
@@ -715,6 +730,8 @@ class ToyLTLRobustness:
         raise ValueError(f"Unknown formula kind: {kind}")
 
     def sequence(self, rs: Sequence[torch.Tensor]) -> torch.Tensor:
+        # Ordered-event robustness. After the first target, each later target
+        # can only use prefix satisfaction from strictly earlier timesteps.
         score = rs[0]
         for r_next in rs[1:]:
             prefix = cumulative_smooth_max(score, tau=self.tau)
@@ -723,6 +740,8 @@ class ToyLTLRobustness:
         return smooth_max(score, dim=1, tau=self.tau)
 
     def hard_satisfaction(self, observations_np: np.ndarray) -> Tuple[float, bool]:
+        # Numpy mirror of the differentiable robustness, used for reporting and
+        # diagnostics. This gives the hard sign of satisfaction on actual traces.
         obs = np.asarray(observations_np, dtype=np.float32)
         agent = obs[:, 0:2]
         r = {}
@@ -754,6 +773,8 @@ class ToyLTLRobustness:
 
 
 def parse_formula_selection(selection: str, limit: int = 0) -> List[FormulaSpec]:
+    # Mostly useful for ad-hoc debugging. The paper horizon experiment builds
+    # formulas directly from its requested prefix chain.
     if selection == "default":
         formulas = list(DEFAULT_FORMULAS)
     else:
@@ -797,6 +818,8 @@ def save_checkpoint(path: Path, diffusion: GaussianTrajectoryDiffusion, ema: EMA
 
 
 def load_checkpoint(path: str, device: torch.device) -> Tuple[GaussianTrajectoryDiffusion, Dict]:
+    # Prefer EMA weights when present; they are what we use for sampling because
+    # they are typically smoother than the raw training weights.
     payload = torch.load(path, map_location=device)
     config = dict(payload["config"])
     diffusion = build_model_from_config(config).to(device)
@@ -815,6 +838,8 @@ def load_checkpoint(path: str, device: torch.device) -> Tuple[GaussianTrajectory
 #######
 
 def train(args: argparse.Namespace) -> None:
+    # Train a full-trajectory Diffuser from demonstrations. No LTL/STL formula
+    # enters training; formulas only appear at sampling time as guidance terms.
     config = TrainConfig(**{k: v for k, v in vars(args).items() if k != "func"})
     seed_everything(config.seed)
     device = get_device(config.device)
@@ -828,6 +853,9 @@ def train(args: argparse.Namespace) -> None:
         max_demos=config.max_demos,
         min_start_gap=config.min_start_gap,
     )
+    # Random split over windows. This is a lightweight sanity check for the
+    # trajectory prior; the paper comparison relies on rollout behavior rather
+    # than only validation loss.
     val_len = max(1, int(0.05 * len(dataset)))
     train_len = len(dataset) - val_len
     train_dataset, val_dataset = random_split(
@@ -859,6 +887,8 @@ def train(args: argparse.Namespace) -> None:
         except StopIteration:
             loader_iter = iter(train_loader)
             batch = next(loader_iter)
+        # Each batch item is a fixed-H state-action trajectory plus its first
+        # observation condition.
         trajectory = batch["trajectory"].to(device)
         condition = batch["condition"].to(device)
         loss = diffusion.loss(trajectory, condition)
@@ -871,6 +901,8 @@ def train(args: argparse.Namespace) -> None:
         progress.set_postfix(loss=f"{float(loss.detach().cpu()):.4f}", best_val=f"{best_val:.4f}")
 
         if step % config.val_every == 0 or step == config.train_steps:
+            # Evaluate with EMA weights, then restore raw weights for continued
+            # optimizer updates.
             backup = {k: v.detach().clone() for k, v in diffusion.model.state_dict().items()}
             ema.copy_to(diffusion.model)
             diffusion.eval()
@@ -925,11 +957,10 @@ def plot_training_curves(metrics_path: Path, output_path: Path) -> None:
 
 ########
 #
-# ENVIRONMENT ROLLOUT AND RECEDING-HORIZON EVALUATION
-# This is where generated plans become actual env behavior. Each iteration
-# samples an LTL-guided full trajectory, executes only the first chunk, then
-# replans from the observed state. actual_satisfied is computed from this real
-# env trace; predicted_satisfied is only the first generated plan's satisfaction.
+# ENVIRONMENT CONSTRUCTION
+# Full-execution evaluation lives in paper_horizon_test.py. This helper stays
+# here because both the training-side loader and paper scripts need the same
+# registered TouchCube environment.
 #
 #######
 
@@ -940,212 +971,12 @@ def make_env():
     return gym.make("TouchCube")
 
 
-def rollout_formula(
-    diffusion: GaussianTrajectoryDiffusion,
-    formula: FormulaSpec,
-    initial_obs: np.ndarray,
-    config: EvalConfig,
-    device: torch.device,
-    rollout_idx: int,
-    formula_dir: Path,
-) -> Dict:
-    env = make_env()
-    env.reset()
-    obs = env.unwrapped.reset_to(raw_reset_state_from_obs(initial_obs))
-    current_obs = obs_from_env_dict(obs)
-    robustness = ToyLTLRobustness(formula)
-    frames = []
-    actual_obs = [current_obs.copy()]
-    actions = []
-    rewards = []
-    contacts = []
-    predicted_first = None
-    predicted_value = None
-
-    if config.render_video:
-        frames.append(env.render(mode="rgb_array", height=256, width=256))
-
-    for step in range(config.env_horizon):
-        cond = torch.as_tensor(current_obs[None], dtype=torch.float32, device=device).repeat(config.batch_size, 1)
-        samples, values = diffusion.sample(
-            cond,
-            batch_size=config.batch_size,
-            guide=robustness,
-            sample_kwargs={
-                "scale": config.guidance_scale,
-                "n_guide_steps": config.n_guide_steps,
-                "t_stopgrad": config.t_stopgrad,
-                "guidance_mode": config.guidance_mode,
-                "scale_grad_by_std": config.scale_grad_by_std,
-                "threshold": config.guidance_threshold,
-            },
-        )
-        sample = samples[0].detach().cpu().numpy()
-        if predicted_first is None:
-            predicted_first = sample.copy()
-            predicted_value = float(values[0].detach().cpu())
-        chunk = sample[: config.execute_steps, :ACTION_DIM]
-        for action in chunk:
-            action = np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
-            next_obs, reward, done, info = env.step(action)
-            current_obs = obs_from_env_dict(next_obs)
-            actual_obs.append(current_obs.copy())
-            actions.append(action.copy())
-            rewards.append(float(reward))
-            contacts.append(int(info.get("cube_contacted", -1)))
-            if config.render_video:
-                frames.append(env.render(mode="rgb_array", height=256, width=256))
-            if config.stop_on_satisfaction:
-                _, is_sat_now = robustness.hard_satisfaction(np.asarray(actual_obs, dtype=np.float32))
-                if is_sat_now:
-                    break
-            if reward < 0:
-                break
-            if config.stop_on_contact and done:
-                break
-            if len(actions) >= config.env_horizon:
-                break
-        if len(actions) >= config.env_horizon:
-            break
-        if rewards and rewards[-1] < 0:
-            break
-        if config.stop_on_satisfaction:
-            _, is_sat_now = robustness.hard_satisfaction(np.asarray(actual_obs, dtype=np.float32))
-            if is_sat_now:
-                break
-        if config.stop_on_contact and contacts and contacts[-1] >= 0:
-            break
-
-    actual_obs_arr = np.asarray(actual_obs, dtype=np.float32)
-    actual_value, actual_sat = robustness.hard_satisfaction(actual_obs_arr)
-    pred_obs = predicted_first[:, ACTION_DIM:] if predicted_first is not None else np.zeros((0, OBS_DIM), dtype=np.float32)
-    pred_value_hard, pred_sat = robustness.hard_satisfaction(pred_obs) if len(pred_obs) else (float("nan"), False)
-    result = {
-        "formula": asdict(formula),
-        "rollout_idx": int(rollout_idx),
-        "steps": int(len(actions)),
-        "total_reward": float(np.sum(rewards)),
-        "contacts": contacts,
-        "first_contact": int(next((c for c in contacts if c >= 0), -1)),
-        "predicted_guidance_value": predicted_value,
-        "predicted_robustness": pred_value_hard,
-        "predicted_satisfied": bool(pred_sat),
-        "actual_robustness": actual_value,
-        "actual_satisfied": bool(actual_sat),
-    }
-    np.savez_compressed(
-        formula_dir / f"rollout_{rollout_idx:03d}.npz",
-        observations=actual_obs_arr,
-        actions=np.asarray(actions, dtype=np.float32),
-        rewards=np.asarray(rewards, dtype=np.float32),
-        contacts=np.asarray(contacts, dtype=np.int32),
-        predicted=predicted_first.astype(np.float32) if predicted_first is not None else np.zeros((0, TRANSITION_DIM), dtype=np.float32),
-    )
-    if config.render_video and frames:
-        imageio.mimsave(formula_dir / f"rollout_{rollout_idx:03d}.mp4", frames, fps=10)
-    return result
-
-
-########
-#
-# ROLLOUT PLOTS AND SUMMARY METRICS
-# Plots show the actual executed agent path against fixed block locations.
-# summary.json reports actual rollout success separately from predicted plan
-# satisfaction so receding-horizon correction is visible in the results.
-#
-#######
-
-def plot_formula_rollouts(formula_dir: Path, formula: FormulaSpec, results: List[Dict], max_rollouts: int = 12) -> None:
-    n = min(max_rollouts, len(results))
-    if n == 0:
-        return
-    cols = min(4, n)
-    rows = int(math.ceil(n / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(3.4 * cols, 3.4 * rows), dpi=160, squeeze=False)
-    for ax in axes.flat:
-        ax.axis("off")
-    for idx, result in enumerate(results[:n]):
-        ax = axes.flat[idx]
-        data = np.load(formula_dir / f"rollout_{idx:03d}.npz")
-        obs = data["observations"]
-        start = obs[0]
-        blocks = {name: start[block_slice] for name, block_slice in LABEL_TO_BLOCK_SLICE.items()}
-        for name, xy in blocks.items():
-            ax.scatter([xy[0]], [xy[1]], s=180, marker="s", c=LABEL_COLORS[name], alpha=0.82, edgecolor="black", linewidth=0.5)
-        ax.plot(obs[:, 0], obs[:, 1], color="#111111", linewidth=1.5, alpha=0.82)
-        ax.scatter([obs[0, 0]], [obs[0, 1]], s=70, c="#888888", edgecolor="white", linewidth=0.8)
-        ax.scatter([obs[-1, 0]], [obs[-1, 1]], s=70, c="#000000", edgecolor="white", linewidth=0.8)
-        title = f"{idx}: r={result['actual_robustness']:.3f} sat={int(result['actual_satisfied'])}"
-        if result["first_contact"] >= 0:
-            title += f" hit={LABEL_NAMES[result['first_contact']]}"
-        ax.set_title(title, fontsize=8)
-        ax.set_xlim(-1.05, 1.05)
-        ax.set_ylim(-1.05, 1.05)
-        ax.set_aspect("equal")
-        ax.grid(True, alpha=0.18)
-    fig.suptitle(f"{formula.name}: {formula.description}", fontsize=12)
-    fig.tight_layout()
-    fig.savefig(formula_dir / "rollouts.png")
-    plt.close(fig)
-
-
-def evaluate(args: argparse.Namespace) -> None:
-    config = EvalConfig(**{k: v for k, v in vars(args).items() if k != "func"})
-    seed_everything(config.seed)
-    device = get_device(config.device)
-    diffusion, payload = load_checkpoint(config.checkpoint, device)
-    diffusion.timesteps = int(config.diffusion_steps)
-    output_dir = Path(config.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "eval_config.json").write_text(json.dumps(asdict(config), indent=2))
-
-    dataset = ToySquaresTrajectoryDataset(config.data_path, horizon=int(payload["config"]["horizon"]), max_demos=0, min_start_gap=64)
-    initial_obs_list = dataset.sample_initial_obs(config.n_rollouts, seed=config.seed + 100) if config.reset_mode == "dataset" else []
-    formulas = parse_formula_selection(config.formulas, config.formula_limit)
-    all_results = {}
-
-    for formula in formulas:
-        formula_dir = output_dir / formula.name
-        formula_dir.mkdir(parents=True, exist_ok=True)
-        results = []
-        iterator = tqdm(range(config.n_rollouts), desc=formula.name, dynamic_ncols=True)
-        for idx in iterator:
-            if config.reset_mode == "dataset":
-                initial_obs = initial_obs_list[idx]
-            else:
-                env = make_env()
-                initial_obs = obs_from_env_dict(env.reset())
-            result = rollout_formula(diffusion, formula, initial_obs, config, device, idx, formula_dir)
-            results.append(result)
-            iterator.set_postfix(sat=np.mean([r["actual_satisfied"] for r in results]))
-        summary = summarize_results(results)
-        payload_formula = {"summary": summary, "rollouts": results}
-        (formula_dir / "results.json").write_text(json.dumps(payload_formula, indent=2))
-        plot_formula_rollouts(formula_dir, formula, results)
-        all_results[formula.name] = summary
-
-    (output_dir / "summary.json").write_text(json.dumps(all_results, indent=2))
-
-
-def summarize_results(results: List[Dict]) -> Dict:
-    if not results:
-        return {}
-    return {
-        "n": len(results),
-        "satisfaction_rate": float(np.mean([r["actual_satisfied"] for r in results])),
-        "predicted_satisfaction_rate": float(np.mean([r["predicted_satisfied"] for r in results])),
-        "mean_actual_robustness": float(np.mean([r["actual_robustness"] for r in results])),
-        "mean_predicted_robustness": float(np.mean([r["predicted_robustness"] for r in results])),
-        "mean_steps": float(np.mean([r["steps"] for r in results])),
-        "contact_rate": float(np.mean([r["first_contact"] >= 0 for r in results])),
-    }
-
-
 ########
 #
 # COMMAND LINE INTERFACE
-# The file exposes two subcommands: train for fitting the Diffuser, and eval
-# for LTLDoG-S guided posterior sampling plus real TouchCube rollouts.
+# The file exposes one subcommand: train for fitting the Diffuser. Rollout
+# scripts import load_ltldog_planner() from ltldog_train.py and run the final
+# full-execution experiments from paper_horizon_test.py.
 #
 #######
 
@@ -1160,26 +991,10 @@ def add_train_parser(subparsers) -> None:
             parser.add_argument(f"--{field}", type=arg_type, default=value)
     parser.set_defaults(func=train)
 
-
-def add_eval_parser(subparsers) -> None:
-    parser = subparsers.add_parser("eval")
-    defaults = EvalConfig(checkpoint="")
-    for field, value in asdict(defaults).items():
-        arg_type = type(value)
-        if field == "checkpoint":
-            parser.add_argument(f"--{field}", required=True)
-        elif isinstance(value, bool):
-            parser.add_argument(f"--{field}", action="store_true" if not value else "store_false")
-        else:
-            parser.add_argument(f"--{field}", type=arg_type, default=value)
-    parser.set_defaults(func=evaluate)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Toy Squares full-trajectory Diffuser + LTLDoG-S baseline")
     subparsers = parser.add_subparsers(required=True)
     add_train_parser(subparsers)
-    add_eval_parser(subparsers)
     args = parser.parse_args()
     args.func(args)
 

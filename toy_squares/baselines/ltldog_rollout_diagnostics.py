@@ -12,6 +12,16 @@ This script compares those two views:
 
 The output lives next to the paper-test rollouts so we can keep the comparison
 auditable without rerunning expensive sampling.
+
+How to read the main metrics:
+
+- "generated blocks" means we evaluate the sampled trajectory exactly as the
+  Diffuser imagined it, including any block motion it may have hallucinated.
+- "fixed initial blocks" means we keep the sampled agent path but replace all
+  sampled block coordinates with the real initial block coordinates. This asks:
+  did the imagined agent path satisfy the formula in the real static layout?
+- "actual" means we ignore imagined states and evaluate the real env trace
+  produced by executing the sampled actions open-loop.
 """
 
 from __future__ import annotations
@@ -45,6 +55,9 @@ LABEL_TO_BLOCK_SLICE = {
 
 @dataclass
 class RolloutDiagnostics:
+    # One row per rollout. The summary table later averages these fields by
+    # horizon and method. Keeping all row-level fields makes it easy to audit
+    # weird cases without recomputing diagnostics.
     horizon_name: str
     method: str
     rollout: str
@@ -109,6 +122,8 @@ def load_json(path: Path) -> Dict:
 
 
 def latest_vector(item: np.ndarray) -> np.ndarray:
+    # Robomimic observations sometimes arrive frame-stacked or singleton-stacked.
+    # For diagnostics we only care about the latest low-dimensional vector.
     arr = np.asarray(item, dtype=np.float32)
     while arr.ndim > 1:
         arr = arr[..., -1]
@@ -116,6 +131,8 @@ def latest_vector(item: np.ndarray) -> np.ndarray:
 
 
 def actual_observations(run_dir: Path) -> np.ndarray:
+    # low_level_obs.npz is written by paper_horizon_test.save_rollout_artifacts.
+    # It contains the real states seen after executing actions in TouchCube.
     with np.load(run_dir / "low_level_obs.npz", allow_pickle=True) as data:
         agent_raw = np.asarray(data["agent_pos"])
         states_raw = np.asarray(data["states"])
@@ -130,10 +147,15 @@ def actual_observations(run_dir: Path) -> np.ndarray:
     else:
         states = np.stack([latest_vector(item)[:8] for item in states_raw], axis=0)
 
+    # Return the same 10D observation layout used by the Diffuser:
+    # [agent_xy, blue_xy, red_xy, green_xy, yellow_xy].
     return np.concatenate([agent, states], axis=-1).astype(np.float32)
 
 
 def predicted_trajectory(run_dir: Path) -> Tuple[np.ndarray, np.ndarray]:
+    # trace.npz stores both the executed action sequence and the first generated
+    # state-action trajectory. The latter has layout:
+    # [action_x, action_y, agent_xy, blue_xy, red_xy, green_xy, yellow_xy].
     with np.load(run_dir / "trace.npz") as data:
         actions = np.asarray(data["actions"], dtype=np.float32)
         predicted = np.asarray(data["predicted"], dtype=np.float32)
@@ -143,6 +165,9 @@ def predicted_trajectory(run_dir: Path) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def fixed_block_observations(pred_obs: np.ndarray, actual_obs: np.ndarray) -> np.ndarray:
+    # This isolates a specific failure mode: LTLDoG may imagine the blocks move
+    # in ways the environment will not. We keep its agent trajectory but freeze
+    # all block coordinates to the real initial positions.
     fixed = pred_obs.copy()
     if len(fixed) == 0 or len(actual_obs) == 0:
         return fixed
@@ -151,16 +176,24 @@ def fixed_block_observations(pred_obs: np.ndarray, actual_obs: np.ndarray) -> np
 
 
 def label_robustness(obs: np.ndarray, label: str, radius: float = 0.2) -> np.ndarray:
+    # Positive robustness means the agent is within radius of the named block.
+    # This mirrors the satisfaction check used during rollout summaries.
     agent = obs[:, 0:2]
     block = obs[:, LABEL_TO_BLOCK_SLICE[label]]
     return radius - np.linalg.norm(agent - block, axis=-1)
 
 
 def sequence_value(obs: np.ndarray, chain: Sequence[str], radius: float = 0.2) -> Tuple[float, bool]:
+    # Strict ordered-event robustness. For chain [a, b, c], each later event
+    # must happen at a strictly later timestep than the previous event. The
+    # dynamic-programming-style scan below is the numpy version of the temporal
+    # robustness used during guided sampling.
     if len(obs) == 0:
         return float("-inf"), False
     score = label_robustness(obs, chain[0], radius=radius)
     for label in chain[1:]:
+        # prefix[t] is the best robustness for satisfying the previous prefix
+        # at or before t. Shifting by one enforces temporal order.
         prefix = np.maximum.accumulate(score)
         shifted_prefix = np.full_like(prefix, -1.0e6)
         shifted_prefix[1:] = prefix[:-1]
@@ -170,6 +203,8 @@ def sequence_value(obs: np.ndarray, chain: Sequence[str], radius: float = 0.2) -
 
 
 def first_target_value(obs: np.ndarray, chain: Sequence[str], radius: float = 0.2) -> Tuple[float, bool, int]:
+    # Useful diagnostic for "did it at least imagine / execute the first goal?"
+    # even when the full ordered formula fails.
     if len(obs) == 0:
         return float("-inf"), False, -1
     r = label_robustness(obs, chain[0], radius=radius)
@@ -186,6 +221,10 @@ def finite_rmse(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def diagnose_rollout(horizon_name: str, method: str, run_dir: Path) -> RolloutDiagnostics:
+    # This is the core comparison for one rollout:
+    #   imagined trajectory with generated blocks,
+    #   imagined trajectory with real fixed blocks,
+    #   actual executed env trajectory.
     summary = load_json(run_dir / "rollout_summary.json")
     chain = tuple(summary["chain"])
     actions, pred_obs = predicted_trajectory(run_dir)
@@ -202,6 +241,8 @@ def diagnose_rollout(horizon_name: str, method: str, run_dir: Path) -> RolloutDi
     block_drift = np.zeros((0,), dtype=np.float32)
     block_drift_at_best = float("nan")
     if len(pred_obs) and len(act_obs):
+        # Blocks are static in Toy Squares. Large drift here means the Diffuser
+        # is satisfying temporal logic partly by moving the world in imagination.
         initial_blocks = act_obs[0, 2:OBS_DIM][None]
         per_step_block_drift = np.linalg.norm(
             pred_obs[:, 2:OBS_DIM].reshape(len(pred_obs), 4, 2)
@@ -247,6 +288,8 @@ def diagnose_rollout(horizon_name: str, method: str, run_dir: Path) -> RolloutDi
 
 
 def iter_rollout_dirs(root: Path, methods: Sequence[str] | None, horizons: Sequence[str] | None) -> Iterable[Tuple[str, str, Path]]:
+    # Folder contract produced by paper_horizon_test:
+    # root/horizon_XX_chain/method/rollout_YYY/{trace.npz, rollout_summary.json}
     horizon_dirs = sorted(root.glob("horizon_*"))
     if horizons:
         wanted_horizons = set(horizons)
@@ -266,6 +309,8 @@ def iter_rollout_dirs(root: Path, methods: Sequence[str] | None, horizons: Seque
 
 
 def summarize(rows: Sequence[RolloutDiagnostics]) -> List[Dict]:
+    # Aggregate rollout-level diagnostics into one row per horizon/method. These
+    # rows drive both the diagnostics plots and the paper-facing combined CSV.
     grouped: Dict[Tuple[str, str], List[RolloutDiagnostics]] = {}
     for row in rows:
         grouped.setdefault((row.horizon_name, row.method), []).append(row)
@@ -325,6 +370,9 @@ def write_csv(path: Path, rows: Sequence[Dict]) -> None:
 
 
 def plot_summary(output_dir: Path, summaries: Sequence[Dict]) -> None:
+    # Bar plots are intentionally diagnostic rather than paper-polished. They
+    # make it easy to see the gap between "the plan looked good" and "execution
+    # actually satisfied the formula".
     if not summaries:
         return
 
@@ -366,6 +414,9 @@ def plot_summary(output_dir: Path, summaries: Sequence[Dict]) -> None:
 
 
 def plot_example_rollouts(output_dir: Path, rows: Sequence[RolloutDiagnostics]) -> None:
+    # For each horizon/method, draw one representative sampled-vs-executed path.
+    # These are especially helpful for checking whether action execution is
+    # drifting away from the generated state trajectory.
     grouped: Dict[Tuple[str, str], RolloutDiagnostics] = {}
     for row in rows:
         grouped.setdefault((row.horizon_name, row.method), row)
@@ -418,6 +469,65 @@ def plot_example_rollouts(output_dir: Path, rows: Sequence[RolloutDiagnostics]) 
     plt.close(fig)
 
 
+def horizon_index(horizon_name: str) -> int:
+    return int(horizon_name.split("_")[1])
+
+
+def write_combined_success(root: Path, output_dir: Path, summaries: Sequence[Dict]) -> None:
+    """Write the paper-facing ours-vs-LTLDoG success table and plot.
+
+    The notebook reads these files directly, so they should be regenerated
+    whenever diagnostics are refreshed rather than patched manually.
+    """
+
+    rows = []
+    for row in sorted(summaries, key=lambda item: (horizon_index(item["horizon"]), item["method"])):
+        ours_summary_path = root / row["horizon"] / "ours" / "summary.json"
+        if not ours_summary_path.exists():
+            continue
+        ours_summary = load_json(ours_summary_path)
+        rows.append(
+            {
+                "ltl_horizon": horizon_index(row["horizon"]),
+                "chain": "->".join(row["chain"]),
+                "ours_actual": float(ours_summary["success_rate"]),
+                "ltldog_imagined_generated_blocks": float(row["predicted_sequence_sat_rate_generated_blocks"]),
+                "ltldog_imagined_fixed_initial_blocks": float(row["predicted_sequence_sat_rate_fixed_blocks"]),
+                "ltldog_actual": float(row["actual_sequence_sat_rate"]),
+                "ltldog_agent_rmse_after_action": float(row["mean_agent_rmse_after_action"]),
+                "ltldog_block_drift_max": float(row["mean_block_drift_max"]),
+            }
+        )
+    if not rows:
+        return
+
+    with open(output_dir / "combined_success_summary.json", "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2)
+    write_csv(output_dir / "combined_success_summary.csv", rows)
+
+    xs = [row["ltl_horizon"] for row in rows]
+    fig, ax = plt.subplots(figsize=(7.2, 4.5), dpi=180, constrained_layout=True)
+    ax.plot(xs, [row["ours_actual"] for row in rows], marker="o", linewidth=3.0, label="ours actual", color="#1f77b4")
+    ax.plot(
+        xs,
+        [row["ltldog_imagined_generated_blocks"] for row in rows],
+        marker="s",
+        linewidth=3.0,
+        label="LTLDoG imagined",
+        color="#ff7f0e",
+    )
+    ax.plot(xs, [row["ltldog_actual"] for row in rows], marker="o", linewidth=3.0, label="LTLDoG actual", color="#d62728")
+    ax.set_title("Prefix-horizon satisfaction")
+    ax.set_xlabel("LTL sequence length")
+    ax.set_ylabel("satisfaction rate")
+    ax.set_xticks(xs)
+    ax.set_ylim(-0.04, 1.04)
+    ax.grid(True, alpha=0.25)
+    ax.legend(frameon=False)
+    fig.savefig(output_dir / "combined_success_rate_imagined_vs_actual.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     args = parse_args()
     output_dir = args.output_dir or (args.root / "diagnostics")
@@ -441,6 +551,7 @@ def main() -> None:
     write_csv(output_dir / "diagnostics_summary.csv", summaries)
     plot_summary(output_dir, summaries)
     plot_example_rollouts(output_dir, rows)
+    write_combined_success(args.root, output_dir, summaries)
 
     print(f"Wrote {len(rows)} rollout diagnostics to {output_dir}")
     for row in summaries:

@@ -79,7 +79,23 @@ from robomimic.scripts.playback_dataset import DEFAULT_CAMERAS
 import random
 
 
+########
+#
+# TOY SQUARES SCRIPTED DATA COLLECTION
+# This file is a lightly adapted robomimic rollout writer. The active path is
+# simple: cycle through the four blocks, use a scripted reaching controller to
+# touch one target block, and save only successful single-target demonstrations.
+#
+# The temporary two-target data-generation mode has been removed. That keeps
+# generated HDF5 files aligned with the one-step automaton world model and the
+# paper experiments.
+#
+#######
+
+
 def parse_obs_keys(value):
+    # CLI convenience: allow either repeated args or comma-separated lists, e.g.
+    # --dataset_obs_keys agent_pos states  OR  --dataset_obs_keys agent_pos,states.
     if value is None:
         return None
     raw_keys = []
@@ -89,14 +105,6 @@ def parse_obs_keys(value):
     return keys or None
 
 
-def target_sequences(num_cubes, sequence_length):
-    if sequence_length == 1:
-        return [(idx,) for idx in range(num_cubes)]
-    if sequence_length == 2:
-        return [(first, second) for first in range(num_cubes) for second in range(num_cubes) if second != first]
-    raise ValueError(f"Unsupported target_sequence_length={sequence_length}. Expected 1 or 2.")
-
-
 def squeeze_obs_dict(obs):
     return {k: np.squeeze(v) for k, v in obs.items()}
 
@@ -104,6 +112,9 @@ def squeeze_obs_dict(obs):
 
 
 class ReachingPolicyKey:
+    # A tiny scripted policy that sends absolute 2D agent-position actions along
+    # a smooth curve to the selected target cube. This is used for data
+    # collection only; it is not the learned DP or LTLDoG policy.
     def __init__(self, num_cubes=4, noise=True, noise_scale=0.03, max_waypoints=1):
         self.tolerance = 0.005
         self.num_cubes = num_cubes 
@@ -112,6 +123,8 @@ class ReachingPolicyKey:
         self.max_waypoints = max_waypoints
 
     def select_random_waypoint(self, obs):
+        # Optional waypoints make demonstrations less perfectly straight while
+        # still avoiding points that are too close to blocks.
         threshold = 20 / 512 # 30 pixels but everything is 0->1 so we make it like this 
         counter = 0 
         # print("selecting random waypoint away from other cubes")
@@ -126,6 +139,8 @@ class ReachingPolicyKey:
                     return waypoint 
                 
     def start_episode(self, target, obs):
+        # Build the piecewise/smooth path for this demo. target is the block
+        # index in env order [blue, red, green, yellow].
         if target is not None: 
             self.target_cube = target 
         else: 
@@ -190,6 +205,8 @@ class ReachingPolicyKey:
         return points
     
     def __call__(self, ob):
+        # Return the next absolute target position along the precomputed curve.
+        # A small amount of action noise improves dataset diversity.
         target_cube = ob["states"][2 * self.target_cube : 2 * self.target_cube + 2][:, 0]  
         current_pos = ob["agent_pos"][:, 0]
         # target_cube = ob["cubes_pos"][self.target_cube]
@@ -235,9 +252,7 @@ def rollout(
     real=False,
     rate_measure=None,
     key=None,
-    target_sequence=None,
     reset_to=None,
-    min_steps_per_target=8,
 ):
     SAVE_ALL = False # save all videos 
     """
@@ -268,29 +283,18 @@ def rollout(
     # assert isinstance(policy, RolloutPolicy)
     assert not (render and (video_writer is not None))
 
-    # want to reset every time we hit key = 0 
-
     if reset_to is not None:
+        # repeat_environment uses reset_to so a full cycle over all four targets
+        # shares one block layout before resetting to a new layout.
         obs = env.reset_to(reset_to)
     else:
         obs = env.reset()
 
 
-    if target_sequence is None:
-        target_sequence = (int(key),)
-    else:
-        target_sequence = tuple(int(x) for x in target_sequence)
-    if not target_sequence:
-        raise ValueError("target_sequence must contain at least one target.")
-
-    # key = count % 4 # this will cycle through the cubes to touch
-    key = target_sequence[0]
-    stage_idx = 0
-    stage_start_step = 0
-    target_contact_steps = []
+    key = int(key)
+    target_contact_step = None
     wrong_contact = False
-    allowed_lingering_contact = None
-    policy.start_episode(target_sequence[stage_idx], squeeze_obs_dict(obs))
+    policy.start_episode(key, squeeze_obs_dict(obs))
 
 
     state_dict = dict()
@@ -313,9 +317,7 @@ def rollout(
         states=[],
         initial_state_dict=state_dict,
         label=[],
-        target_stage=[],
         contacts=[],
-        target_sequence=np.array(target_sequence, dtype=np.int64),
     )
     if return_obs:
         # store observations too
@@ -352,31 +354,17 @@ def rollout(
             total_reward += r
             contact = int(info.get("cube_contacted", -1))
 
-            # Sequence-aware success logic. A contact with the current target
-            # advances to the next stage; a different contact fails the demo.
-            # Right after reaching a block, repeated contact with that same
-            # block is allowed until the agent has fully separated from it.
+            # A target contact succeeds the demo; touching any other block
+            # fails it. The temporary two-target collection path was removed
+            # so generated datasets stay aligned with the paper experiments.
             success = False
             if contact >= 0:
-                expected_contact = target_sequence[stage_idx] if stage_idx < len(target_sequence) else None
-                steps_in_stage = step_i - stage_start_step
-                if stage_idx < len(target_sequence) and contact == expected_contact and steps_in_stage >= min_steps_per_target:
-                    target_contact_steps.append(int(step_i))
-                    stage_idx += 1
-                    allowed_lingering_contact = contact
-                    if stage_idx >= len(target_sequence):
-                        success = True
-                    else:
-                        policy.start_episode(target_sequence[stage_idx], squeeze_obs_dict(next_obs))
-                        stage_start_step = step_i + 1
-                elif allowed_lingering_contact is not None and contact == allowed_lingering_contact:
-                    success = False
+                if contact == key:
+                    target_contact_step = int(step_i)
+                    success = True
                 else:
                     wrong_contact = True
-            else:
-                allowed_lingering_contact = None
 
-            success = success or stage_idx >= len(target_sequence)
             # success = env.is_success()["task"]
 
             # visualization
@@ -396,9 +384,7 @@ def rollout(
             traj["rewards"].append(r)
             traj["dones"].append(done)
 
-            current_target = target_sequence[min(stage_idx, len(target_sequence) - 1)]
-            traj["label"].append(current_target) #this is for the classifier
-            traj["target_stage"].append(stage_idx)
+            traj["label"].append(key) #this is for the classifier
             traj["contacts"].append(contact)
             # if not real:
             #     traj["states"].append(state_dict["states"])
@@ -412,10 +398,6 @@ def rollout(
                 traj["next_obs"].append(ObsUtils.unprocess_obs_dict(next_obs))
 
 
-            # For multi-target demos, the env reports done on any contact. We
-            # keep going after the first requested contact and only terminate
-            # once the whole sequence is complete, a wrong cube is hit, or the
-            # agent leaves the board.
             if success or wrong_contact or r < 0:
                 break
             
@@ -431,9 +413,9 @@ def rollout(
         print("WARNING: got rollout exception {}".format(e))
         got_exception = True
     
-    if len(target_contact_steps) != len(target_sequence):
-        success = False
-    if target_contact_steps and min(np.diff([-min_steps_per_target - 1] + target_contact_steps)) < min_steps_per_target:
+    if target_contact_step is None:
+        # No contact with the intended block within the horizon means this demo
+        # should not be used for training when keep_only_successful is set.
         success = False
     if wrong_contact:
         success = False # we hit something along the way, call this a failure 
@@ -448,8 +430,8 @@ def rollout(
         Success_Rate=float(success),
         Exception_Rate=float(got_exception),
         time=(time.time() - rollout_timestamp),
-        Target_Length=len(target_sequence),
-        Num_Targets_Reached=len(target_contact_steps),
+        Target=int(key),
+        Num_Targets_Reached=int(target_contact_step is not None),
         Wrong_Contact=float(wrong_contact),
     )
 
@@ -538,6 +520,9 @@ def run_trained_agent(args):
         ObsUtils.initialize_obs_utils_with_obs_specs(obs_specs)
     
     policy = ReachingPolicyKey(
+        # This policy ignores learned checkpoints. The script name is inherited
+        # from robomimic, but here "trained agent" really means scripted data
+        # generator for Toy Squares.
         num_cubes=4,
         noise=args.policy_noise_scale > 0,
         noise_scale=args.policy_noise_scale,
@@ -603,7 +588,6 @@ def run_trained_agent(args):
     pbar = tqdm(total=rollout_num_episodes, desc="Rollouts", unit="episode")
 
     REPEAT_ENVIRONMENT = args.repeat_environment # if you want uniform coverage 
-    sequence_cycle = target_sequences(num_cubes=4, sequence_length=args.target_sequence_length)
     dataset_obs_keys = parse_obs_keys(args.dataset_obs_keys)
 
     MAX_TRIES = 10
@@ -613,8 +597,9 @@ def run_trained_agent(args):
 
     try:
         while i < rollout_num_episodes:
-            target_sequence = sequence_cycle[i % len(sequence_cycle)]
-            key = target_sequence[0]
+            # Cycle targets in env block order so the dataset is roughly
+            # balanced across blue, red, green, and yellow.
+            key = i % 4
             try:
                 stats, traj = rollout(
                     policy=policy, 
@@ -628,8 +613,6 @@ def run_trained_agent(args):
                     real=is_real_robot,
                     rate_measure=rate_measure,
                     key=key,
-                    target_sequence=target_sequence,
-                    min_steps_per_target=args.min_steps_per_target,
                     reset_to=current_state if REPEAT_ENVIRONMENT else None 
                 )
             except KeyboardInterrupt:
@@ -641,6 +624,8 @@ def run_trained_agent(args):
                 # print("Failed run, not saved")
                 try_count += 1 
                 if try_count > MAX_TRIES: # sometimes you can't reach a cube in the environment even with one waypoint 
+                    # If one layout repeatedly fails, sample a fresh layout
+                    # rather than over-spending collection time on it.
                     env.reset() 
                     current_state = env.get_state() 
                     # print("\t\tFAILED TOO MANY TIMES, TRYING ANOTHER ENVIRONMENT")
@@ -650,6 +635,8 @@ def run_trained_agent(args):
                 try_count = 0 
 
             if write_dataset:
+                # HDF5 layout follows robomimic conventions: each demo_N stores
+                # actions, labels, contacts, and optionally obs / next_obs.
                 # store transitions
                 ep_data_grp = data_grp.create_group("demo_{}".format(i))
                 ep_data_grp.create_dataset("actions", data=np.array(traj["actions"]))
@@ -657,9 +644,7 @@ def run_trained_agent(args):
                 ep_data_grp.create_dataset("rewards", data=np.array(traj["rewards"]))
                 ep_data_grp.create_dataset("dones", data=np.array(traj["dones"]))
                 ep_data_grp.create_dataset("label", data=np.array(traj["label"]))
-                ep_data_grp.create_dataset("target_stage", data=np.array(traj["target_stage"]))
                 ep_data_grp.create_dataset("contacts", data=np.array(traj["contacts"]))
-                ep_data_grp.create_dataset("target_sequence", data=np.array(traj["target_sequence"]))
                 if args.dataset_obs:
                     obs_keys_to_write = list(traj["obs"].keys()) if dataset_obs_keys is None else dataset_obs_keys
                     missing_keys = [k for k in obs_keys_to_write if k not in traj["obs"]]
@@ -679,7 +664,9 @@ def run_trained_agent(args):
             pbar.update(1)
             pbar.set_postfix(saved=i)
             # if we've made it this far, we're successful 
-            if i % len(sequence_cycle) == 0: # touch every target sequence once
+            if i % 4 == 0: # touch every target once
+                # After one full target cycle, move to a fresh randomized env
+                # unless repeat_environment is disabled.
                 obs = env.reset()
                 current_state = env.get_state() 
     finally:
@@ -812,19 +799,6 @@ if __name__ == "__main__":
         nargs="+",
         default=None,
         help="optional subset of obs keys to write, e.g. --dataset_obs_keys agent_pos states",
-    )
-    parser.add_argument(
-        "--target_sequence_length",
-        type=int,
-        choices=[1, 2],
-        default=1,
-        help="number of different blocks the scripted policy should touch before ending an episode",
-    )
-    parser.add_argument(
-        "--min_steps_per_target",
-        type=int,
-        default=8,
-        help="minimum number of controller steps required before accepting a target contact",
     )
     parser.add_argument(
         "--policy_noise_scale",

@@ -1,14 +1,15 @@
-"""Train the Toy Squares automaton model on one- or two-event futures.
+"""Train the Toy Squares one-step automaton model.
 
-The original notebook model predicts one future block label from the current
-state, the current label, and an 8-action chunk. This script keeps that setup
-but can also train an 8-logit model:
+The model predicts the next block label from the current state, current label,
+and an 8-action chunk. The temporary two-event / next-next-label training path
+has been removed so this script matches the paper experiments again.
 
-    logits[:, 0:4] -> next nonzero label
-    logits[:, 4:8] -> next nonzero label after that
-
-The second head is useful for checking whether the world model can see the
-ordered block sequence in two-block scripted demonstrations.
+High-level data flow:
+  1. Read scripted HDF5 demonstrations.
+  2. Convert env state into symbolic labels with a distance threshold.
+  3. Build samples of (current state, current label, 8-action chunk).
+  4. Train an MLP to predict which label is true after the action horizon.
+  5. Save normalization stats and checkpoints for automaton-guided rollouts.
 """
 
 from __future__ import annotations
@@ -54,6 +55,9 @@ def get_demo_keys(hdf5_path: Path, mask: str | None = None) -> list[str]:
 
 
 def label_states(states: np.ndarray, radius: float) -> np.ndarray:
+    # Env block order is [blue, red, green, yellow], while the automaton model
+    # uses [at_green, at_blue, at_red, at_yellow]. LABEL_TO_STATE_BLOCK_IDX is
+    # the small but important reorder map between those conventions.
     states = np.asarray(states, dtype=np.float32)
     agent = states[:, 0:2]
     blocks = states[:, 2:10].reshape(len(states), 4, 2)
@@ -64,40 +68,10 @@ def label_states(states: np.ndarray, radius: float) -> np.ndarray:
     return np.stack(labels, axis=-1).astype(np.float32)
 
 
-def future_nonzero_event_labels(labels: np.ndarray, immediate_next_labels: np.ndarray, max_events: int = 2) -> np.ndarray:
-    """Return the next `max_events` nonzero label plateaus after each step.
-
-    All-zero "not touching a block" plateaus are skipped. This makes a
-    two-block demo produce, near the start, next=first block and
-    next_next=second block instead of next_next=the zero gap after contact.
-    """
-
-    labels = np.asarray(labels, dtype=np.float32)
-    immediate_next_labels = np.asarray(immediate_next_labels, dtype=np.float32)
-    if len(labels) != len(immediate_next_labels):
-        raise ValueError("labels and immediate_next_labels must have the same length")
-
-    timeline = np.concatenate([labels[:1], immediate_next_labels], axis=0)
-    out = np.zeros((len(labels), max_events, labels.shape[-1]), dtype=np.float32)
-
-    for t in range(len(labels)):
-        previous = timeline[t]
-        events = []
-        for future_label in timeline[t + 1 :]:
-            if np.array_equal(future_label, previous):
-                continue
-            previous = future_label
-            if np.any(future_label > 0.5):
-                events.append(future_label)
-                if len(events) >= max_events:
-                    break
-        for event_idx, event in enumerate(events):
-            out[t, event_idx] = event
-
-    return out
-
-
 def build_automaton_trajectories(hdf5_path: Path, demo_keys: list[str], radius: float) -> list[dict]:
+    # Keep trajectories in episode form first. Flattening happens after the
+    # train/val split so temporally neighboring windows from the same demo do
+    # not leak across splits.
     trajectories = []
     with h5py.File(hdf5_path, "r") as f:
         for demo_key in demo_keys:
@@ -116,8 +90,10 @@ def build_automaton_trajectories(hdf5_path: Path, demo_keys: list[str], radius: 
                 continue
 
             labels = label_states(states, radius=radius)
-            immediate_next_labels = label_states(next_states, radius=radius)
-            future_events = future_nonzero_event_labels(labels, immediate_next_labels, max_events=2)
+            # next_labels here is the immediate next-step label sequence. Later,
+            # horizon_targets shifts it by action_horizon so each sample asks:
+            # "after this 8-action chunk, which block label is true?"
+            next_labels = label_states(next_states, radius=radius)
 
             trajectories.append(
                 {
@@ -126,8 +102,7 @@ def build_automaton_trajectories(hdf5_path: Path, demo_keys: list[str], radius: 
                     "states": states,
                     "actions": actions,
                     "labels": labels,
-                    "next_labels": future_events[:, 0],
-                    "next_next_labels": future_events[:, 1],
+                    "next_labels": next_labels,
                 }
             )
 
@@ -150,6 +125,8 @@ def split_trajectories(trajectories: list[dict], val_ratio: float, seed: int) ->
 
 
 def horizon_targets(values: np.ndarray, action_horizon: int) -> np.ndarray:
+    # Align targets with action chunks. If sample t contains actions
+    # t:t+action_horizon, its target label is read at t+action_horizon.
     values = np.asarray(values, dtype=np.float32)
     n_chunks = len(values) - int(action_horizon)
     if n_chunks <= 0:
@@ -157,10 +134,10 @@ def horizon_targets(values: np.ndarray, action_horizon: int) -> np.ndarray:
     return values[action_horizon:].astype(np.float32)
 
 
-def flatten_trajectories(trajectories: list[dict], action_horizon: int, predict_next_next: bool) -> dict[str, np.ndarray]:
+def flatten_trajectories(trajectories: list[dict], action_horizon: int) -> dict[str, np.ndarray]:
+    # Convert a list of variable-length demos into independent supervised
+    # samples. Each action sample is flattened from [H, action_dim] to [H*A].
     keys = ["states", "actions", "labels", "next_labels"]
-    if predict_next_next:
-        keys.append("next_next_labels")
     flat = {key: [] for key in keys}
 
     for traj in trajectories:
@@ -178,8 +155,6 @@ def flatten_trajectories(trajectories: list[dict], action_horizon: int, predict_
         flat["actions"].append(action_chunks)
         flat["labels"].append(traj["labels"][:-action_horizon])
         flat["next_labels"].append(horizon_targets(traj["next_labels"], action_horizon))
-        if predict_next_next:
-            flat["next_next_labels"].append(horizon_targets(traj["next_next_labels"], action_horizon))
 
     if not flat["states"]:
         raise ValueError(f"No trajectories were long enough for action_horizon={action_horizon}.")
@@ -187,6 +162,8 @@ def flatten_trajectories(trajectories: list[dict], action_horizon: int, predict_
 
 
 def normalization_stats(flat_train: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    # Only continuous inputs are normalized during training. Labels remain raw
+    # binary vectors so BCEWithLogitsLoss sees calibrated targets.
     stats = {
         "states_mean": flat_train["states"].mean(axis=0),
         "states_std": flat_train["states"].std(axis=0) + 1e-8,
@@ -197,22 +174,17 @@ def normalization_stats(flat_train: dict[str, np.ndarray]) -> dict[str, np.ndarr
         "next_labels_mean": flat_train["next_labels"].mean(axis=0),
         "next_labels_std": flat_train["next_labels"].std(axis=0) + 1e-8,
     }
-    if "next_next_labels" in flat_train:
-        stats["next_next_labels_mean"] = flat_train["next_next_labels"].mean(axis=0)
-        stats["next_next_labels_std"] = flat_train["next_next_labels"].std(axis=0) + 1e-8
     return stats
 
 
 class AutomatonDataset(Dataset):
-    def __init__(self, flat_data: dict[str, np.ndarray], stats: dict[str, np.ndarray], predict_next_next: bool):
+    def __init__(self, flat_data: dict[str, np.ndarray], stats: dict[str, np.ndarray]):
+        # Normalize state/action inputs using train-set stats. Current labels
+        # and next labels are left as one-hot-ish binary vectors.
         self.states = ((flat_data["states"] - stats["states_mean"]) / stats["states_std"]).astype(np.float32)
         self.actions = ((flat_data["actions"] - stats["actions_mean"]) / stats["actions_std"]).astype(np.float32)
         self.labels = flat_data["labels"].astype(np.float32)
         self.next_labels = flat_data["next_labels"].astype(np.float32)
-        self.predict_next_next = predict_next_next
-        self.next_next_labels = flat_data.get("next_next_labels")
-        if self.next_next_labels is not None:
-            self.next_next_labels = self.next_next_labels.astype(np.float32)
 
     def __len__(self) -> int:
         return len(self.states)
@@ -224,8 +196,6 @@ class AutomatonDataset(Dataset):
             "labels": torch.from_numpy(self.labels[idx]),
             "next_labels": torch.from_numpy(self.next_labels[idx]),
         }
-        if self.predict_next_next:
-            item["next_next_labels"] = torch.from_numpy(self.next_next_labels[idx])
         return item
 
 
@@ -254,6 +224,8 @@ class AutomatonMLP(nn.Module):
         )
 
     def forward(self, states, actions, labels):
+        # Separate encoders make it easier for the small MLP to balance three
+        # different input types: geometry, planned motion, and current contact.
         z = torch.cat([self.state_enc(states), self.action_enc(actions), self.label_enc(labels)], dim=-1)
         return self.head(z)
 
@@ -273,9 +245,7 @@ def label_counts(array: np.ndarray) -> dict[str, int]:
     return {str(label): int(count) for label, count in counts.items()}
 
 
-def make_target_matrix(flat_data: dict[str, np.ndarray], predict_next_next: bool) -> np.ndarray:
-    if predict_next_next:
-        return np.concatenate([flat_data["next_labels"], flat_data["next_next_labels"]], axis=-1).astype(np.float32)
+def make_target_matrix(flat_data: dict[str, np.ndarray]) -> np.ndarray:
     return flat_data["next_labels"].astype(np.float32)
 
 
@@ -293,11 +263,12 @@ def positive_class_weights(targets: np.ndarray, max_pos_weight: float) -> np.nda
 def predictability_diagnostics(flat_data: dict[str, np.ndarray], action_horizon: int) -> dict[str, object]:
     """Cheap data-side checks for what the 8-action chunk can plausibly reveal."""
 
+    # This is not a learned model. It checks whether the mean action direction
+    # roughly points toward the eventual target block. If this baseline is poor,
+    # the data itself may be ambiguous for an 8-action automaton predictor.
     states = flat_data["states"]
     action_chunks = flat_data["actions"].reshape(len(states), int(action_horizon), -1)
     next_labels = flat_data["next_labels"]
-    next_next_labels = flat_data.get("next_next_labels")
-
     agent = states[:, 0:2]
     blocks = states[:, 2:10].reshape(len(states), 4, 2)
     label_order_blocks = blocks[:, LABEL_TO_STATE_BLOCK_IDX, :]
@@ -321,30 +292,12 @@ def predictability_diagnostics(flat_data: dict[str, np.ndarray], action_horizon:
         "next_positive_rate": next_labels.mean(axis=0).round(6).tolist(),
         "mean_action_direction_next_top1": direction_next_top1,
     }
-    if next_next_labels is not None:
-        next_next_nonzero = next_next_labels.sum(axis=-1) > 0.5
-        diagnostics["next_next_positive_rate"] = next_next_labels.mean(axis=0).round(6).tolist()
-        diagnostics["next_next_nonzero_samples"] = int(next_next_nonzero.sum())
-        conditional_counts = {}
-        majority_correct = 0
-        for next_idx in range(next_labels.shape[-1]):
-            mask = next_next_nonzero & (next_labels.sum(axis=-1) > 0.5) & (next_labels.argmax(axis=-1) == next_idx)
-            counts = np.bincount(next_next_labels[mask].argmax(axis=-1), minlength=next_next_labels.shape[-1])
-            total = int(counts.sum())
-            majority_correct += int(counts.max()) if total else 0
-            conditional_counts[LABEL_NAMES[next_idx]] = {
-                "num_samples": total,
-                "next_next_counts": {LABEL_NAMES[i]: int(counts[i]) for i in range(len(LABEL_NAMES))},
-                "majority_accuracy": float(counts.max() / total) if total else float("nan"),
-            }
-        diagnostics["next_next_counts_conditioned_on_next"] = conditional_counts
-        diagnostics["next_next_majority_ceiling_given_next"] = float(
-            majority_correct / max(1, int(next_next_nonzero.sum()))
-        )
     return diagnostics
 
 
 def head_metrics(logits: torch.Tensor, targets: torch.Tensor, prefix: str) -> dict[str, float]:
+    # Report both bit-level BCE-style accuracy and nonzero-label top-1. The
+    # latter is the most interpretable metric when a contact label exists.
     probs = torch.sigmoid(logits)
     preds = (probs >= 0.5).float()
     bit_acc = (preds == targets).float().mean().item()
@@ -373,7 +326,9 @@ def head_metrics(logits: torch.Tensor, targets: torch.Tensor, prefix: str) -> di
     }
 
 
-def evaluate(model: nn.Module, loader: DataLoader, loss_fn, device: str, predict_next_next: bool) -> dict[str, float]:
+def evaluate(model: nn.Module, loader: DataLoader, loss_fn, device: str) -> dict[str, float]:
+    # Evaluation collects logits for the whole loader so metrics are computed
+    # over examples rather than averaged batch metrics with unequal batch sizes.
     model.eval()
     loss_sum = 0.0
     n_samples = 0
@@ -384,11 +339,7 @@ def evaluate(model: nn.Module, loader: DataLoader, loss_fn, device: str, predict
             states = batch["states"].to(device)
             actions = batch["actions"].to(device)
             labels = batch["labels"].to(device)
-            next_labels = batch["next_labels"].to(device)
-            if predict_next_next:
-                targets = torch.cat([next_labels, batch["next_next_labels"].to(device)], dim=-1)
-            else:
-                targets = next_labels
+            targets = batch["next_labels"].to(device)
             logits = model(states, actions, labels)
             loss = loss_fn(logits, targets)
             batch_size = states.shape[0]
@@ -400,17 +351,16 @@ def evaluate(model: nn.Module, loader: DataLoader, loss_fn, device: str, predict
     logits = torch.cat(all_logits, dim=0)
     targets = torch.cat(all_targets, dim=0)
     metrics = {"loss": loss_sum / max(1, n_samples)}
-    metrics |= head_metrics(logits[:, :4], targets[:, :4], "next")
-    if predict_next_next:
-        metrics |= head_metrics(logits[:, 4:8], targets[:, 4:8], "next_next")
+    metrics |= head_metrics(logits, targets, "next")
     return metrics
 
 
 def make_run_dir(args) -> Path:
+    # Include model sizes in the run name so old experiments are readable from
+    # the folder name even before opening train_config.json.
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    mode = "two_event" if args.predict_next_next else "one_event"
     run_name = (
-        f"{mode}_h{args.action_horizon}_sh{args.state_hidden}_ah{args.action_hidden}_"
+        f"one_event_h{args.action_horizon}_sh{args.state_hidden}_ah{args.action_hidden}_"
         f"lh{args.label_hidden}_hh{args.hidden_dim}_lr{args.lr:g}_{timestamp}"
     )
     run_dir = args.output_root / run_name
@@ -423,6 +373,8 @@ def make_run_dir(args) -> Path:
 
 
 def save_loss_plot(history: list[dict[str, float]], path: Path) -> None:
+    # Quick visual check for under/overfitting. The JSON history remains the
+    # source of truth; this plot is a convenience artifact.
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot([row["train_loss"] for row in history], label="train", alpha=0.85)
     ax.plot([row["val_loss"] for row in history], label="val", alpha=0.85)
@@ -437,14 +389,15 @@ def save_loss_plot(history: list[dict[str, float]], path: Path) -> None:
 
 
 def main() -> None:
+    # CLI defaults point back to the single-target training data used for the
+    # automaton-guided paper experiments.
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--dataset", type=Path, default=Path("outputs/toy_squares_data/two_block_train/data.hdf5"))
-    parser.add_argument("--output-root", type=Path, default=Path("outputs/automaton_world_model_two_step"))
+    parser.add_argument("--dataset", type=Path, default=Path("/home/shared/data/toy_squares/train/data.hdf5"))
+    parser.add_argument("--output-root", type=Path, default=Path("outputs/automaton_world_model"))
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--max-demos", type=int, default=None)
     parser.add_argument("--radius", type=float, default=0.2)
     parser.add_argument("--action-horizon", type=int, default=8)
-    parser.add_argument("--predict-next-next", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--epochs", type=int, default=120)
     parser.add_argument("--patience", type=int, default=18)
     parser.add_argument("--batch-size", type=int, default=4096)
@@ -468,12 +421,14 @@ def main() -> None:
 
     trajectories = build_automaton_trajectories(args.dataset, demo_keys, radius=args.radius)
     train_trajectories, val_trajectories = split_trajectories(trajectories, args.val_ratio, args.split_seed)
-    flat_train = flatten_trajectories(train_trajectories, args.action_horizon, args.predict_next_next)
-    flat_val = flatten_trajectories(val_trajectories, args.action_horizon, args.predict_next_next)
+    # Flatten only after splitting by trajectory to avoid near-duplicate action
+    # chunks from the same demo appearing in both train and validation.
+    flat_train = flatten_trajectories(train_trajectories, args.action_horizon)
+    flat_val = flatten_trajectories(val_trajectories, args.action_horizon)
     stats = normalization_stats(flat_train)
 
-    train_dataset = AutomatonDataset(flat_train, stats, args.predict_next_next)
-    val_dataset = AutomatonDataset(flat_val, stats, args.predict_next_next)
+    train_dataset = AutomatonDataset(flat_train, stats)
+    val_dataset = AutomatonDataset(flat_val, stats)
     generator = torch.Generator().manual_seed(args.seed)
     pin_memory = torch.cuda.is_available()
     train_loader = DataLoader(
@@ -487,7 +442,6 @@ def main() -> None:
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, pin_memory=pin_memory, num_workers=args.num_workers)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    output_dim = 8 if args.predict_next_next else 4
     model_config = {
         "state_dim": int(flat_train["states"].shape[-1]),
         "label_dim": len(LABEL_NAMES),
@@ -496,14 +450,14 @@ def main() -> None:
         "label_hidden": args.label_hidden,
         "action_hidden": args.action_hidden,
         "hidden_dim": args.hidden_dim,
-        "output_dim": output_dim,
+        "output_dim": 4,
     }
     model = AutomatonMLP(**model_config).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    target_mean = make_target_matrix(flat_train, args.predict_next_next).mean(axis=0)
+    target_mean = make_target_matrix(flat_train).mean(axis=0)
     pos_weight = None
     if args.balance_positive_labels:
-        pos_weight = positive_class_weights(make_target_matrix(flat_train, args.predict_next_next), args.max_pos_weight)
+        pos_weight = positive_class_weights(make_target_matrix(flat_train), args.max_pos_weight)
         loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.from_numpy(pos_weight).to(device))
     else:
         loss_fn = nn.BCEWithLogitsLoss()
@@ -533,8 +487,6 @@ def main() -> None:
                 "train_next_labels": label_counts(flat_train["next_labels"]),
                 "val_labels": label_counts(flat_val["labels"]),
                 "val_next_labels": label_counts(flat_val["next_labels"]),
-                "train_next_next_labels": label_counts(flat_train["next_next_labels"]) if args.predict_next_next else {},
-                "val_next_next_labels": label_counts(flat_val["next_next_labels"]) if args.predict_next_next else {},
             },
             indent=2,
         )
@@ -571,6 +523,8 @@ def main() -> None:
     epochs_since_improvement = 0
     last_epoch = -1
     for epoch in range(args.epochs):
+        # Standard supervised training loop. The action chunk and current state
+        # are already normalized by AutomatonDataset.
         last_epoch = epoch
         model.train()
         train_loss_sum = 0.0
@@ -579,11 +533,7 @@ def main() -> None:
             states = batch["states"].to(device)
             actions = batch["actions"].to(device)
             labels = batch["labels"].to(device)
-            next_labels = batch["next_labels"].to(device)
-            if args.predict_next_next:
-                targets = torch.cat([next_labels, batch["next_next_labels"].to(device)], dim=-1)
-            else:
-                targets = next_labels
+            targets = batch["next_labels"].to(device)
             optimizer.zero_grad(set_to_none=True)
             logits = model(states, actions, labels)
             loss = loss_fn(logits, targets)
@@ -593,11 +543,12 @@ def main() -> None:
             train_samples += states.shape[0]
 
         train_loss = train_loss_sum / max(1, train_samples)
-        val_metrics = evaluate(model, val_loader, loss_fn, device, args.predict_next_next)
+        val_metrics = evaluate(model, val_loader, loss_fn, device)
         row = {"epoch": epoch, "train_loss": train_loss, "val_loss": val_metrics["loss"]} | val_metrics
         history.append(row)
         is_best = val_metrics["loss"] < best_val_loss - 1e-5
         if is_best:
+            # best_model.pt is what downstream guided rollout code should use.
             best_val_loss = val_metrics["loss"]
             best_epoch = epoch
             epochs_since_improvement = 0
@@ -623,7 +574,6 @@ def main() -> None:
         print(
             f"epoch {epoch + 1:03d} | train {train_loss:.5f} | val {val_metrics['loss']:.5f} | "
             f"next_top1 {val_metrics['next_nonzero_top1_acc']:.3f} | "
-            f"next2_top1 {val_metrics.get('next_next_nonzero_top1_acc', float('nan')):.3f}"
             f"{' | best' if is_best else ''}",
             flush=True,
         )
@@ -632,7 +582,7 @@ def main() -> None:
             print(f"Early stopping at epoch {epoch + 1}.", flush=True)
             break
 
-    final_metrics = evaluate(model, val_loader, loss_fn, device, args.predict_next_next)
+    final_metrics = evaluate(model, val_loader, loss_fn, device)
     torch.save(
         {
             "epoch": last_epoch,

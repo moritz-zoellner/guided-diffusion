@@ -15,24 +15,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from toy_squares.baselines.ltldog_toy import (  # noqa: E402
-    ACTION_DIM,
-    DEFAULT_FORMULAS,
-    LABEL_COLORS,
-    LABEL_NAMES,
-    LABEL_TO_BLOCK_SLICE,
-    OBS_DIM,
-    TRANSITION_DIM,
-    EvalConfig,
     FormulaSpec,
     GaussianTrajectoryDiffusion,
     ToyLTLRobustness,
-    TrainConfig,
     add_train_parser,
-    build_model_from_config,
     get_device,
     load_checkpoint,
-    seed_everything,
-    train,
 )
 
 
@@ -43,17 +31,37 @@ from toy_squares.baselines.ltldog_toy import (  # noqa: E402
 # LTLDoG Diffuser. The model architecture still lives in ltldog_toy.py for now,
 # but users should import load_ltldog_planner() from here for experiments.
 #
+# Mental model:
+#   1. ltldog_toy.py defines the neural Diffuser and robustness math.
+#   2. This file wraps a trained checkpoint into a tiny LTLDogPlanner object.
+#   3. Rollout scripts call planner.sample_plan(obs, formula, ...).
+#   4. sample_plan returns full H-step trajectories sorted by guided
+#      robustness, plus the corresponding robustness values.
+#
+# Keeping this wrapper small is intentional: rollout code should not have to
+# know about EMA weights, torch devices, checkpoint payload structure, or how
+# the differentiable LTL robustness object is constructed.
+#
 #######
 
 
 @dataclass
 class LTLDogPlanner:
+    # The loaded diffusion module. It contains both the TemporalDenoiser and
+    # the Gaussian reverse-process buffers (betas, alphas, posterior variance).
     diffusion: GaussianTrajectoryDiffusion
+
+    # Raw checkpoint dictionary. We keep it around so experiments can inspect
+    # the training horizon and architecture without reopening the checkpoint.
     checkpoint_payload: Dict
+
+    # Torch device used for all sampling calls. The public sample_plan API
+    # accepts / returns numpy arrays, so callers never need to manage this.
     device: torch.device
 
     @property
     def train_config(self) -> Dict:
+        # Stored by ltldog_toy.train(); includes horizon, channels, depth, etc.
         return dict(self.checkpoint_payload["config"])
 
     @property
@@ -65,6 +73,8 @@ class LTLDogPlanner:
         return int(self.diffusion.timesteps)
 
     def make_robustness(self, formula: FormulaSpec, radius: float = 0.2, tau: float = 0.05) -> ToyLTLRobustness:
+        # ToyLTLRobustness is differentiable. During sampling, gradients of this
+        # scalar robustness are inserted into the reverse diffusion process.
         return ToyLTLRobustness(formula, radius=radius, tau=tau)
 
     @torch.no_grad()
@@ -83,8 +93,15 @@ class LTLDogPlanner:
         tau: float = 0.05,
         freeze_static_blocks: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray]:
+        # Convert the current env observation into the conditioning vector used
+        # by the Diffuser. We repeat it across the sampling batch because each
+        # candidate plan starts from the same observed state but different noise.
         robustness = self.make_robustness(formula, radius=radius, tau=tau)
         condition = torch.as_tensor(observation[None], dtype=torch.float32, device=self.device).repeat(int(batch_size), 1)
+
+        # diffusion.sample() performs posterior-sampling guidance internally.
+        # In the final paper baseline, the first returned sample is then
+        # executed open-loop for the full horizon by paper_horizon_test.py.
         samples, values = self.diffusion.sample(
             condition,
             batch_size=int(batch_size),
@@ -117,6 +134,9 @@ def load_ltldog_planner(
     device: str | torch.device = "auto",
     diffusion_steps: int | None = None,
 ) -> LTLDogPlanner:
+    # load_checkpoint handles checkpoint payload format and EMA weights. This
+    # wrapper only resolves the requested device and optionally overrides the
+    # number of reverse diffusion steps for evaluation-time ablations.
     resolved_device = get_device(device) if isinstance(device, str) else device
     diffusion, payload = load_checkpoint(str(checkpoint), resolved_device)
     if diffusion_steps is not None:

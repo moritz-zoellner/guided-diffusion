@@ -32,16 +32,32 @@ from toy_squares.baselines.paper_horizon_test import (
 # these traces to show the environment layout and what the learned base policy
 # tends to do before symbolic steering is applied.
 #
+# This is not part of the LTLDoG baseline itself. It only gives us a visual
+# "what does the base DP prior do?" panel for the paper:
+#   - same compact deterministic layout as the main comparison,
+#   - no automaton gradient updates,
+#   - no LTL/STL objective,
+#   - just repeatedly sample the DP action horizon and execute it.
+#
 #######
 
 
 def block_hits_from_state(state: np.ndarray, radius: float) -> Dict[str, bool]:
+    # labels_from_state returns signed robustness (radius - distance) for each
+    # block. Positive means the agent is inside the contact radius, which is
+    # exactly how the paper horizon tests decide a symbolic "hit".
     return {name: robustness > 0.0 for name, robustness in labels_from_state(state, radius).items()}
 
 
 def run_base_dp_rollout(runner: OursRunner, config: PaperTestConfig, rollout_idx: int, run_dir: Path) -> Dict:
+    # We reuse OursRunner because it already knows how to load the robomimic DP
+    # checkpoint, reset the Toy Squares env, and unnormalize DP action chunks.
+    # The important difference is that we never call optimize_chunk().
     seed = int(config.seed_start) + int(rollout_idx)
     reseed(seed)
+
+    # rollout_setup_state centralizes the compact deterministic layout. Keeping
+    # it shared avoids subtle "same plot, different block positions" mistakes.
     setup_state = rollout_setup_state(config)
     reseed(seed)
     obs = runner.env.reset_to(setup_state)
@@ -59,12 +75,17 @@ def run_base_dp_rollout(runner: OursRunner, config: PaperTestConfig, rollout_idx
     try:
         for t in range(int(config.env_horizon)):
             if not action_queue:
+                # Diffusion Policy predicts a short action chunk. The chunk is
+                # normalized in robomimic's policy space, so we unnormalize it
+                # before sending actions to the TouchCube env.
                 obs_tensor = runner.policy._prepare_observation(obs)
                 with torch.no_grad():
                     chunk_n = runner.policy.policy._get_action_trajectory(obs_dict=obs_tensor).detach()
                 chunk_raw = runner.unnormalize_action_sequence(chunk_n).detach().cpu().numpy()[0]
                 action_queue.extend(np.asarray(chunk_raw, dtype=np.float32))
 
+            # Execute one action at a time. This mirrors how the guided method
+            # eventually interacts with the env, but without any symbolic target.
             action = np.asarray(action_queue.pop(0), dtype=np.float32)
             obs, reward, _done, info = runner.env.step(action)
             low_level_obs.append(obs_snapshot(obs))
@@ -74,6 +95,8 @@ def run_base_dp_rollout(runner: OursRunner, config: PaperTestConfig, rollout_idx
             state = flat_state_from_low_level(obs_snapshot(obs))
             hits = block_hits_from_state(state, config.radius)
             for block_name, hit in hits.items():
+                # Store first-hit times rather than every hit. The paper plot
+                # uses these as unobtrusive markers on top of the base path.
                 if hit and block_name not in first_hits:
                     first_hits[block_name] = int(t + 1)
             records.append(
@@ -104,6 +127,9 @@ def run_base_dp_rollout(runner: OursRunner, config: PaperTestConfig, rollout_idx
 
 
 def summarize(results: List[Dict], output_dir: Path) -> Dict:
+    # The notebook mostly reads individual rollouts, but this summary gives a
+    # quick sanity check that the base policy actually moves around the layout
+    # and occasionally touches blocks without being told which one to visit.
     summary = {
         "method": "base_dp_unguided",
         "n": int(len(results)),
@@ -139,6 +165,8 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     config = PaperTestConfig(
+        # PaperTestConfig has many fields because it is shared with the main
+        # comparison. Only the env/reset/policy-loading fields matter here.
         output_dir=str(output_dir),
         dp_checkpoint=args.dp_checkpoint,
         automaton_run_dir=args.automaton_run_dir,
@@ -160,6 +188,8 @@ def main() -> None:
         run_dir = output_dir / f"rollout_{idx:03d}"
         summary_path = run_dir / "rollout_summary.json"
         if summary_path.exists():
+            # Idempotent reruns are useful when tuning plots: existing traces
+            # are reused unless the rollout folder is manually deleted.
             result = json.loads(summary_path.read_text())
         else:
             result = run_base_dp_rollout(runner, config, idx, run_dir)
