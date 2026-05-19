@@ -21,6 +21,7 @@ import random
 import sys
 import time
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Sequence
 
@@ -53,6 +54,27 @@ OPPOSITE_LABEL_NAMES = {
     "door_right": "door_left",
 }
 
+TASK_LABEL_NAMES = {
+    "drawer_close": "drawer_closed",
+    "button_on": "button_pressed",
+    "button_off": "button_pressed",
+}
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    task_name: str
+    output_name: str
+    guidance_label_name: Optional[str] = None
+
+DEFAULT_RESET_ROBOT_Y_MIN = -0.25
+DEFAULT_RESET_SWITCH_CLEARANCE = 0.01
+DEFAULT_SETTLE_STEPS = 10
+DEFAULT_SETTLE_GRIPPER = 1.0
+SWITCH_AABB = (
+    np.asarray([0.23574800789356232, 0.04078434035181999, 0.5603019595146179], dtype=np.float32),
+    np.asarray([0.3642496168613434, 0.12373494356870651, 0.6314389705657959], dtype=np.float32),
+)
 DEFAULT_CONFIG_DIR = Path("calvin_experiments/configs/dynaguide_articulated_objects")
 DEFAULT_OUTPUT_ROOT = Path("outputs/calvin_paper/articulated_objects")
 DEFAULT_VISUALIZATION_CONFIG = Path("calvin_experiments/configs/visualization_freiburg_style.json")
@@ -235,6 +257,85 @@ def load_reset_poses(task_config: Dict[str, Any], config_path: Path) -> Optional
     return [np.asarray(robot_state, dtype=np.float32) for robot_state in poses["robot_states"]]
 
 
+def filter_reset_poses(
+    poses: Optional[list[np.ndarray]],
+    *,
+    robot_y_min: Optional[float],
+    robot_y_max: Optional[float],
+    switch_clearance: Optional[float],
+) -> tuple[Optional[list[np.ndarray]], Dict[str, Any]]:
+    if poses is None:
+        return None, {"enabled": False}
+
+    original_count = len(poses)
+    filtered = list(poses)
+    counts = {"original_count": int(original_count)}
+    if robot_y_min is not None:
+        filtered = [pose for pose in filtered if float(pose[1]) >= float(robot_y_min)]
+    counts["after_robot_y_min"] = int(len(filtered))
+    if robot_y_max is not None:
+        filtered = [pose for pose in filtered if float(pose[1]) <= float(robot_y_max)]
+    counts["after_robot_y_max"] = int(len(filtered))
+    if switch_clearance is not None and float(switch_clearance) > 0.0:
+        lo, hi = SWITCH_AABB
+        clearance = float(switch_clearance)
+        filtered = [
+            pose
+            for pose in filtered
+            if distance_to_aabb(np.asarray(pose[:3], dtype=np.float32), lo, hi) > clearance
+        ]
+    counts["after_switch_clearance"] = int(len(filtered))
+    if not filtered:
+        raise ValueError(
+            "Reset-pose filter removed every pose "
+            f"(original={original_count}, y_min={robot_y_min}, y_max={robot_y_max}, "
+            f"switch_clearance={switch_clearance})"
+        )
+    return filtered, {
+        "enabled": bool(robot_y_min is not None or robot_y_max is not None or switch_clearance is not None),
+        **counts,
+        "filtered_count": int(len(filtered)),
+        "robot_y_min": None if robot_y_min is None else float(robot_y_min),
+        "robot_y_max": None if robot_y_max is None else float(robot_y_max),
+        "switch_clearance": None if switch_clearance is None else float(switch_clearance),
+    }
+
+
+def distance_to_aabb(point: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> float:
+    below = np.maximum(lo - point, 0.0)
+    above = np.maximum(point - hi, 0.0)
+    return float(np.linalg.norm(below + above))
+
+
+def idle_action_from_checkpoint(ckpt_dict: Dict[str, Any], gripper: float = DEFAULT_SETTLE_GRIPPER) -> np.ndarray:
+    shape_meta = ckpt_dict.get("shape_metadata", {})
+    action_dim = int(shape_meta.get("ac_dim", 7))
+    action = np.zeros((action_dim,), dtype=np.float32)
+    if action_dim > 0:
+        action[-1] = float(gripper)
+    return action
+
+
+def settle_metrics(scene_states: Sequence[np.ndarray]) -> Dict[str, Any]:
+    if not scene_states:
+        return {}
+    scenes = np.asarray(scene_states, dtype=np.float32)
+    metrics: Dict[str, Any] = {
+        "n_states": int(len(scenes)),
+        "pre_settle_scene_head": scenes[0, :6].astype(float).tolist(),
+        "post_settle_scene_head": scenes[-1, :6].astype(float).tolist(),
+    }
+    for color, pos_slice in CRU.BLOCK_POS_SLICES.items():
+        displacements = np.linalg.norm(scenes[:, pos_slice] - scenes[0, pos_slice], axis=1)
+        metrics[f"{color}_final_displacement"] = float(displacements[-1])
+        metrics[f"{color}_max_displacement"] = float(np.max(displacements))
+        if len(scenes) > 1:
+            step_deltas = np.linalg.norm(np.diff(scenes[:, pos_slice], axis=0), axis=1)
+            metrics[f"{color}_max_step_delta"] = float(np.max(step_deltas))
+            metrics[f"{color}_final_step_delta"] = float(step_deltas[-1])
+    return metrics
+
+
 def dynaguide_scene_from_base(base_scene: Sequence[float], env_setup: Dict[str, float]) -> tuple[np.ndarray, list[bool]]:
     """Apply DynaGuide's articulated reset while preserving sampled block poses."""
 
@@ -285,6 +386,32 @@ def make_sample_rank_action_provider(policy, guidance: AutomatonGuidance, target
     return action_provider
 
 
+def guidance_label_name_for_task(task_name: str, override: Optional[str] = None) -> str:
+    return override or TASK_LABEL_NAMES.get(task_name, task_name)
+
+
+def parse_task_spec(raw_spec: str) -> TaskSpec:
+    raw_spec = raw_spec.strip()
+    if not raw_spec:
+        raise ValueError("Empty task spec")
+
+    for separator in ("=", ":"):
+        if separator in raw_spec:
+            task_name, label_name = [part.strip() for part in raw_spec.split(separator, 1)]
+            if not task_name or not label_name:
+                raise ValueError(f"Malformed task spec {raw_spec!r}; expected TASK=LABEL")
+            output_name = f"{task_name}_as_{label_name}"
+            return TaskSpec(task_name=task_name, output_name=output_name, guidance_label_name=label_name)
+
+    return TaskSpec(task_name=raw_spec, output_name=raw_spec, guidance_label_name=None)
+
+
+def parse_task_specs(raw_specs: Optional[Sequence[str]]) -> list[TaskSpec]:
+    if not raw_specs:
+        return [TaskSpec(task_name=task, output_name=task) for task in RELEVANT_BEHAVIORS]
+    return [parse_task_spec(raw_spec) for raw_spec in raw_specs]
+
+
 def rollout_policy_once(
     *,
     seed: int,
@@ -300,25 +427,58 @@ def rollout_policy_once(
     horizon: int,
     video_cfg: Dict[str, Any],
     save_video: bool = True,
+    reset_robot_y_min: Optional[float] = DEFAULT_RESET_ROBOT_Y_MIN,
+    reset_robot_y_max: Optional[float] = None,
+    reset_switch_clearance: Optional[float] = DEFAULT_RESET_SWITCH_CLEARANCE,
+    settle_steps: int = DEFAULT_SETTLE_STEPS,
+    settle_gripper: float = DEFAULT_SETTLE_GRIPPER,
+    guidance_label_override: Optional[str] = None,
+    task_output_name: Optional[str] = None,
 ):
     CRU.seed_everything(seed)
     env, base_env_state = CRU.load_fresh_env_from_checkpoint(ckpt_dict, seed=int(seed), suppress_output=True)
     try:
-        reset_poses = load_reset_poses(task_config, task_config_path)
+        task_output_name = task_output_name or task_name
+        guidance_label_name = guidance_label_name_for_task(task_name, guidance_label_override)
+        target_label_idx = guidance.label_index(guidance_label_name)
+        reset_poses, reset_pose_filter = filter_reset_poses(
+            load_reset_poses(task_config, task_config_path),
+            robot_y_min=reset_robot_y_min,
+            robot_y_max=reset_robot_y_max,
+            switch_clearance=reset_switch_clearance,
+        )
         scene, binaries = dynaguide_scene_from_base(base_env_state["scene"], task_config.get("env_setup", {}))
         robot = np.asarray(base_env_state["robot"], dtype=np.float32).copy()
         if reset_poses:
             robot = random.choice(reset_poses).copy()
 
-        policy.start_episode()
         obs = CRU.reset_env_to_scene_robot(env, scene, robot)
+        pre_settle_state = env.get_state()
+        pre_settle_scene = np.asarray(pre_settle_state["scene"], dtype=np.float32).copy()
+        pre_settle_robot = np.asarray(pre_settle_state["robot"], dtype=np.float32).copy()
+        _, pre_settle_label = guidance.current_state_and_label(env)
+
+        settle_action = idle_action_from_checkpoint(ckpt_dict, gripper=settle_gripper)
+        settle_scene_states = [pre_settle_scene.copy()]
+        settle_robot_states = [pre_settle_robot.copy()]
+        settle_rewards, settle_dones = [], []
+        for _ in range(max(0, int(settle_steps))):
+            obs, reward, done, _ = env.step(settle_action)
+            settle_rewards.append(float(reward))
+            settle_dones.append(bool(done))
+            state_after_settle = env.get_state()
+            settle_scene_states.append(np.asarray(state_after_settle["scene"], dtype=np.float32).copy())
+            settle_robot_states.append(np.asarray(state_after_settle["robot"], dtype=np.float32).copy())
+
+        policy.start_episode()
         scene_snapshot = CRU.capture_scene_snapshot(env)
         frames = [CRU.render_visual_camera(env, video_cfg)] if save_video else []
 
         start_state = env.get_state()
         start_scene = np.asarray(start_state["scene"], dtype=np.float32).copy()
         _, label0 = guidance.current_state_and_label(env)
-        action_provider = make_sample_rank_action_provider(policy, guidance, task_name, n_candidates)
+        target_label_initial = bool(label0[target_label_idx] >= 0.5)
+        action_provider = make_sample_rank_action_provider(policy, guidance, guidance_label_name, n_candidates)
 
         actions, rewards, dones, records = [], [], [], []
         scene_states = [start_scene.copy()]
@@ -328,7 +488,12 @@ def rollout_policy_once(
         detected_behavior = "none"
         detected_step = -1
         termination_reason = "horizon"
+        target_label_flipped = False
+        target_label_flip_step = -1
         total_reward = 0.0
+        ignored_behavior_events = []
+        last_ignored_behavior = "other"
+        env_done_step = -1
 
         for step in range(int(horizon)):
             if not action_queue:
@@ -354,30 +519,49 @@ def rollout_policy_once(
                 frames.append(CRU.render_visual_camera(env, video_cfg))
 
             behavior_now = CRU.classify_behavior(start_scene, scene_now, robot_now[:3], binaries, for_display=False)
-            if behavior_now != "other":
-                detected_behavior = behavior_now
-                detected_step = int(step + 1)
-                termination_reason = "behavior"
-                break
+            if behavior_now == task_name:
+                if detected_step < 0:
+                    detected_behavior = behavior_now
+                    detected_step = int(step + 1)
+            elif behavior_now != "other" and behavior_now != last_ignored_behavior:
+                ignored_behavior_events.append({"behavior": behavior_now, "step": int(step + 1)})
+                last_ignored_behavior = behavior_now
 
-            if done:
-                termination_reason = "env_done"
+            if done and env_done_step < 0:
+                env_done_step = int(step + 1)
+
+            _, label_now = guidance.current_state_and_label(env)
+            target_label_current = bool(label_now[target_label_idx] >= 0.5)
+            if (not target_label_initial) and target_label_current:
+                target_label_flipped = True
+                target_label_flip_step = int(step + 1)
+                termination_reason = "target_label_flip"
                 break
             obs = next_obs
         else:
             step = int(horizon) - 1
 
         _, labelf = guidance.current_state_and_label(env)
+        target_label_final = bool(labelf[target_label_idx] >= 0.5)
         rollout = {
             "task": task_name,
+            "task_output_name": task_output_name,
             "scene_config": task_config.get("name", task_name),
             "seed": int(seed),
-            "target_label_name": task_name,
+            "target_behavior_name": task_name,
+            "target_label_name": guidance_label_name,
+            "target_label_idx": int(target_label_idx),
+            "target_label_initial": bool(target_label_initial),
+            "target_label_final": bool(target_label_final),
+            "label_flipped": bool(target_label_flipped),
+            "label_flip_step": int(target_label_flip_step),
             "behavior": detected_behavior,
             "behavior_step": int(detected_step),
-            "success": bool(detected_behavior == task_name),
+            "behavior_success": bool(detected_behavior == task_name),
+            "success": bool(target_label_flipped),
             "termination_step": int(step + 1),
             "termination_reason": termination_reason,
+            "env_done_step": int(env_done_step),
             "return": float(total_reward),
             "initial_label": label0.astype(int).tolist(),
             "final_label": labelf.astype(int).tolist(),
@@ -388,17 +572,28 @@ def rollout_policy_once(
             "robot_states": robot_states,
             "eef_xy": eef_xy,
             "records": records,
+            "ignored_behavior_events": ignored_behavior_events,
             "scene_snapshot": scene_snapshot,
             "reset_env_setup": dict(task_config.get("env_setup", {})),
             "reset_robot_from_pose_file": bool(reset_poses),
+            "reset_pose_filter": reset_pose_filter,
+            "settle_steps": int(max(0, int(settle_steps))),
+            "settle_action": settle_action.astype(float).tolist(),
+            "pre_settle_label": pre_settle_label.astype(int).tolist(),
+            "settle_scene_states": settle_scene_states,
+            "settle_robot_states": settle_robot_states,
+            "settle_rewards": settle_rewards,
+            "settle_dones": settle_dones,
+            "settle_metrics": settle_metrics(settle_scene_states),
         }
         if save_video:
             CRU.save_rollout_artifacts(rollout, frames, output_dir, rollout_tag, video_cfg, fps=VIDEO_FPS)
         rollout_dir = Path(rollout.get("rollout_dir", output_dir / rollout_tag))
+        label_status = f"{guidance_label_name} flip @ {target_label_flip_step}" if target_label_flipped else f"no {guidance_label_name} flip"
         CRU.plot_rollout_xy(
             [rollout],
             rollout["scene_snapshot"],
-            f"{task_name} seed {seed} -> {detected_behavior}",
+            f"{task_output_name} seed {seed} -> {label_status}",
             save_path=rollout_dir / "rollout_xy.png",
             display_inline=False,
         )
@@ -406,17 +601,32 @@ def rollout_policy_once(
             rollout_dir / "rollout_summary.json",
             {
                 "task": task_name,
+                "task_output_name": task_output_name,
                 "seed": int(seed),
-                "success": bool(detected_behavior == task_name),
+                "target_label_name": guidance_label_name,
+                "target_label_idx": int(target_label_idx),
+                "target_label_initial": bool(target_label_initial),
+                "target_label_final": bool(target_label_final),
+                "label_flipped": bool(target_label_flipped),
+                "label_flip_step": int(target_label_flip_step),
+                "success": bool(target_label_flipped),
                 "behavior": detected_behavior,
                 "behavior_step": int(detected_step),
+                "behavior_success": bool(detected_behavior == task_name),
                 "termination_step": int(step + 1),
                 "termination_reason": termination_reason,
+                "env_done_step": int(env_done_step),
                 "initial_label": rollout["initial_label"],
                 "final_label": rollout["final_label"],
                 "video": str(rollout.get("video")),
                 "trace": str(rollout.get("trace")),
                 "topdown_plot": str(rollout_dir / "rollout_xy.png"),
+                "ignored_behavior_events": ignored_behavior_events,
+                "reset_pose_filter": reset_pose_filter,
+                "settle_steps": rollout["settle_steps"],
+                "settle_action": rollout["settle_action"],
+                "pre_settle_label": rollout["pre_settle_label"],
+                "settle_metrics": rollout["settle_metrics"],
                 "records": records,
             },
         )
@@ -427,29 +637,48 @@ def rollout_policy_once(
 
 def task_summary(task_name: str, rollouts: Sequence[Dict[str, Any]], n_candidates: int, horizon: int) -> Dict[str, Any]:
     behavior_counts = Counter(rollout["behavior"] for rollout in rollouts)
-    successes = sum(1 for rollout in rollouts if rollout["behavior"] == task_name)
+    ignored_behavior_counts = Counter(
+        event["behavior"]
+        for rollout in rollouts
+        for event in rollout.get("ignored_behavior_events", [])
+    )
+    successes = sum(1 for rollout in rollouts if rollout["success"])
+    behavior_successes = sum(1 for rollout in rollouts if rollout.get("behavior_success", rollout["behavior"] == task_name))
     return {
         "task": task_name,
         "n_rollouts": len(rollouts),
         "n_candidates": int(n_candidates),
         "horizon": int(horizon),
+        "evaluation": "target_label_flip",
         "success_count": int(successes),
         "success_rate": float(successes / len(rollouts)) if rollouts else 0.0,
+        "behavior_success_count": int(behavior_successes),
         "behavior_counts": dict(behavior_counts),
+        "ignored_behavior_counts": dict(ignored_behavior_counts),
         "avg_termination_step": float(np.mean([rollout["termination_step"] for rollout in rollouts])) if rollouts else 0.0,
         "rollouts": [
             {
                 "seed": rollout["seed"],
-                "success": bool(rollout["behavior"] == task_name),
+                "success": bool(rollout["success"]),
+                "label_flipped": bool(rollout.get("label_flipped", rollout["success"])),
+                "label_flip_step": rollout.get("label_flip_step", -1),
+                "target_label_name": rollout.get("target_label_name"),
+                "target_label_initial": rollout.get("target_label_initial"),
+                "target_label_final": rollout.get("target_label_final"),
                 "behavior": rollout["behavior"],
                 "behavior_step": rollout["behavior_step"],
+                "behavior_success": bool(rollout.get("behavior_success", rollout["behavior"] == task_name)),
                 "termination_step": rollout["termination_step"],
                 "termination_reason": rollout["termination_reason"],
+                "env_done_step": rollout.get("env_done_step", -1),
                 "initial_label": rollout["initial_label"],
                 "final_label": rollout["final_label"],
                 "video": str(rollout.get("video")),
                 "trace": str(rollout.get("trace")),
                 "topdown_plot": str(Path(rollout.get("rollout_dir", "")) / "rollout_xy.png"),
+                "ignored_behavior_events": rollout.get("ignored_behavior_events", []),
+                "settle_steps": rollout.get("settle_steps", 0),
+                "settle_metrics": rollout.get("settle_metrics", {}),
             }
             for rollout in rollouts
         ],
@@ -462,11 +691,14 @@ def write_summary_tables(run_dir: Path, summaries: Sequence[Dict[str, Any]]) -> 
     rows = [
         {
             "task": item["task"],
+            "evaluation": item["evaluation"],
             "success_rate": f"{item['success_rate']:.4f}",
             "success_count": item["success_count"],
+            "behavior_success_count": item["behavior_success_count"],
             "n_rollouts": item["n_rollouts"],
             "avg_termination_step": f"{item['avg_termination_step']:.2f}",
             "behavior_counts": json.dumps(item["behavior_counts"], sort_keys=True),
+            "ignored_behavior_counts": json.dumps(item["ignored_behavior_counts"], sort_keys=True),
         }
         for item in summaries
     ]
@@ -474,18 +706,30 @@ def write_summary_tables(run_dir: Path, summaries: Sequence[Dict[str, Any]]) -> 
     with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["task", "success_rate", "success_count", "n_rollouts", "avg_termination_step", "behavior_counts"],
+            fieldnames=[
+                "task",
+                "evaluation",
+                "success_rate",
+                "success_count",
+                "behavior_success_count",
+                "n_rollouts",
+                "avg_termination_step",
+                "behavior_counts",
+                "ignored_behavior_counts",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)
 
     with open(md_path, "w") as f:
-        f.write("| task | success_rate | success_count | n_rollouts | avg_termination_step | behavior_counts |\n")
-        f.write("|---|---:|---:|---:|---:|---|\n")
+        f.write("| task | evaluation | success_rate | success_count | behavior_success_count | n_rollouts | avg_termination_step | behavior_counts | ignored_behavior_counts |\n")
+        f.write("|---|---|---:|---:|---:|---:|---:|---|---|\n")
         for row in rows:
             f.write(
-                f"| {row['task']} | {row['success_rate']} | {row['success_count']} | "
-                f"{row['n_rollouts']} | {row['avg_termination_step']} | `{row['behavior_counts']}` |\n"
+                f"| {row['task']} | {row['evaluation']} | {row['success_rate']} | "
+                f"{row['success_count']} | {row['behavior_success_count']} | "
+                f"{row['n_rollouts']} | {row['avg_termination_step']} | "
+                f"`{row['behavior_counts']}` | `{row['ignored_behavior_counts']}` |\n"
             )
 
 
@@ -497,11 +741,52 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--visualization-config", type=Path, default=DEFAULT_VISUALIZATION_CONFIG)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--name", default=None, help="Run folder name under output-root. Defaults to timestamped sample_rank name.")
-    parser.add_argument("--tasks", nargs="+", default=RELEVANT_BEHAVIORS, choices=RELEVANT_BEHAVIORS)
+    parser.add_argument(
+        "--tasks",
+        "--run-for",
+        nargs="*",
+        default=None,
+        choices=None,
+        help=(
+            "Tasks to run. Omit this flag, or pass it with no values, to run all tasks. "
+            "Use TASK=LABEL to reuse a task reset/config with a different automaton label, "
+            "e.g. button_on=button_pressed."
+        ),
+    )
     parser.add_argument("--n-rollouts", type=int, default=50)
     parser.add_argument("--n-candidates", type=int, default=16)
     parser.add_argument("--horizon", type=int, default=400)
     parser.add_argument("--seed-start", type=int, default=0)
+    parser.add_argument(
+        "--settle-steps",
+        type=int,
+        default=DEFAULT_SETTLE_STEPS,
+        help="Run this many idle zero-delta env steps after reset and before first policy sample.",
+    )
+    parser.add_argument(
+        "--settle-gripper",
+        type=float,
+        default=DEFAULT_SETTLE_GRIPPER,
+        help="Last action dimension during settling. CALVIN thresholds 0 to close, so +1 keeps the gripper open.",
+    )
+    parser.add_argument(
+        "--reset-robot-y-min",
+        type=float,
+        default=DEFAULT_RESET_ROBOT_Y_MIN,
+        help="Drop reset-pose-file robot starts with initial y below this value.",
+    )
+    parser.add_argument("--reset-robot-y-max", type=float, default=None)
+    parser.add_argument(
+        "--reset-switch-clearance",
+        type=float,
+        default=DEFAULT_RESET_SWITCH_CLEARANCE,
+        help="Drop reset-pose-file robot starts whose EEF is within this distance of the switch AABB.",
+    )
+    parser.add_argument(
+        "--disable-reset-pose-filter",
+        action="store_true",
+        help="Use every reset pose from the DynaGuide pose files, including far-back and switch-collision outliers.",
+    )
     parser.add_argument("--no-video", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Validate paths and planned tasks without loading models or running CALVIN.")
     return parser.parse_args()
@@ -509,11 +794,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    task_specs = parse_task_specs(args.tasks)
+    reset_robot_y_min = None if args.disable_reset_pose_filter else args.reset_robot_y_min
+    reset_robot_y_max = None if args.disable_reset_pose_filter else args.reset_robot_y_max
+    reset_switch_clearance = None if args.disable_reset_pose_filter else args.reset_switch_clearance
     config_dir = resolve_existing_path(repo_path(args.config_dir))
     visualization_config = resolve_existing_path(repo_path(args.visualization_config))
     policy_ckpt_candidate = repo_path(args.policy_ckpt)
     automaton_ckpt_candidate = repo_path(args.automaton_ckpt)
-    task_config_paths = {task: resolve_existing_path(config_dir / f"{task}.json") for task in args.tasks}
+    task_config_paths = {
+        task: resolve_existing_path(config_dir / f"{task}.json")
+        for task in sorted({spec.task_name for spec in task_specs})
+    }
 
     run_name = args.name or f"sample_rank_candidates{args.n_candidates}_horizon{args.horizon}_{time.strftime('%Y%m%d_%H%M%S')}"
     run_dir = repo_path(args.output_root) / run_name
@@ -526,12 +818,29 @@ def main() -> None:
         "config_dir": str(config_dir),
         "visualization_config": str(visualization_config),
         "output_dir": str(run_dir),
-        "tasks": list(args.tasks),
+        "tasks": [spec.output_name for spec in task_specs],
+        "task_specs": [
+            {
+                "task": spec.task_name,
+                "output_name": spec.output_name,
+                "guidance_label_name": guidance_label_name_for_task(spec.task_name, spec.guidance_label_name),
+            }
+            for spec in task_specs
+        ],
         "task_configs": {task: str(path) for task, path in task_config_paths.items()},
         "n_rollouts": int(args.n_rollouts),
         "n_candidates": int(args.n_candidates),
         "horizon": int(args.horizon),
         "seed_start": int(args.seed_start),
+        "evaluation": "target_label_flip",
+        "stop_condition": "target_label_flip_or_horizon",
+        "diagnostic_behavior_detector": "classify_behavior",
+        "settle_steps": int(args.settle_steps),
+        "settle_gripper": float(args.settle_gripper),
+        "reset_robot_y_min": reset_robot_y_min,
+        "reset_robot_y_max": reset_robot_y_max,
+        "reset_switch_clearance": reset_switch_clearance,
+        "disable_reset_pose_filter": bool(args.disable_reset_pose_filter),
     }
     if args.dry_run:
         print(json.dumps(planned, indent=2))
@@ -572,14 +881,17 @@ def main() -> None:
     print("output:", run_dir)
 
     all_task_summaries = []
-    for task in args.tasks:
+    for spec in task_specs:
+        task = spec.task_name
+        output_task = spec.output_name
+        guidance_label_name = guidance_label_name_for_task(task, spec.guidance_label_name)
         task_config_path = task_config_paths[task]
         task_config = load_json(task_config_path)
-        task_dir = run_dir / task
+        task_dir = run_dir / output_task
         task_dir.mkdir(parents=True, exist_ok=True)
         write_json(task_dir / "task_config_resolved.json", task_config)
 
-        print(f"\nTask {task}: config={task_config_path}")
+        print(f"\nTask {output_task}: config={task_config_path}, target_label={guidance_label_name}")
         rollouts = []
         for rollout_idx in range(int(args.n_rollouts)):
             seed = int(args.seed_start) + rollout_idx
@@ -598,20 +910,28 @@ def main() -> None:
                 horizon=int(args.horizon),
                 video_cfg=video_cfg,
                 save_video=not args.no_video,
+                reset_robot_y_min=reset_robot_y_min,
+                reset_robot_y_max=reset_robot_y_max,
+                reset_switch_clearance=reset_switch_clearance,
+                settle_steps=int(args.settle_steps),
+                settle_gripper=float(args.settle_gripper),
+                guidance_label_override=spec.guidance_label_name,
+                task_output_name=output_task,
             )
             rollouts.append(rollout)
             print(
                 f"  seed {seed:03d}: success={rollout['success']} "
+                f"label_flip={rollout['label_flip_step']:>3}, "
                 f"behavior={rollout['behavior']:>12} @ {rollout['behavior_step']:>3}, "
                 f"steps={rollout['termination_step']:>3}, final={format_onehot(rollout['final_label'])}"
             )
 
-        summary = task_summary(task, rollouts, args.n_candidates, args.horizon)
+        summary = task_summary(output_task, rollouts, args.n_candidates, args.horizon)
         write_json(task_dir / "task_summary.json", summary)
         CRU.plot_rollout_xy(
             rollouts,
             rollouts[0]["scene_snapshot"],
-            f"{task} | success {summary['success_count']}/{summary['n_rollouts']} | candidates={args.n_candidates}",
+            f"{output_task} | success {summary['success_count']}/{summary['n_rollouts']} | candidates={args.n_candidates}",
             save_path=task_dir / "task_rollouts_xy.png",
             display_inline=False,
         )

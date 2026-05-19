@@ -96,6 +96,7 @@ def load_flower_model(checkpoint: Path, device):
             overwrite_cfg={
                 "num_sampling_steps": 4,
                 "multistep": 10,
+                "query_seq_len": 120,
                 "return_act_chunk": False,
             },
         )

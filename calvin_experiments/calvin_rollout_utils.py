@@ -259,7 +259,7 @@ def automaton_model_for_eval(model_or_run_path: Path | str, device):
         metadata_path = ckpt_path.parent / metadata_name
         if metadata_path.exists():
             with open(metadata_path) as f:
-                run_config |= json.load(f)
+                run_config.update(json.load(f))
 
     training_config = ckpt.get("training_config", {})
     label_names = (
@@ -394,6 +394,34 @@ def load_fresh_env_from_checkpoint(
     return env, base_env_state
 
 
+def _calvin_scene_from_wrapped_env(env):
+    current = env
+    for _ in range(8):
+        scene = getattr(current, "scene", None)
+        if scene is not None and hasattr(scene, "buttons"):
+            return scene
+        current = getattr(current, "env", None)
+        if current is None:
+            break
+    return None
+
+
+def sync_button_logic_to_lights(env) -> None:
+    """Keep CALVIN's hidden edge-triggered button state consistent with scene_obs lights."""
+
+    scene = _calvin_scene_from_wrapped_env(env)
+    if scene is None:
+        return
+    for button in getattr(scene, "buttons", []):
+        light = getattr(button, "light", None)
+        if light is None or not hasattr(button, "state"):
+            continue
+        state_cls = button.state.__class__
+        button.state = state_cls.ON if float(light.get_state()) > 0.5 else state_cls.OFF
+        if hasattr(button, "prev_is_pressed"):
+            button.prev_is_pressed = button._is_pressed
+
+
 def reset_env_to_scene_robot(env, scene: Sequence[float], robot: Sequence[float]):
     """Reset CALVIN to an explicit scene / robot state while keeping wrappers in sync."""
 
@@ -408,6 +436,7 @@ def reset_env_to_scene_robot(env, scene: Sequence[float], robot: Sequence[float]
     gym_env = getattr(robomimic_env, "env", None)
     if gym_env is not None and hasattr(gym_env, "reset") and hasattr(robomimic_env, "get_observation"):
         raw_obs = gym_env.reset(scene_obs=state["scene"], robot_obs=state["robot"])
+        sync_button_logic_to_lights(env)
         if isinstance(raw_obs, tuple):
             raw_obs = raw_obs[0]
         robomimic_env._current_obs = raw_obs
@@ -420,7 +449,9 @@ def reset_env_to_scene_robot(env, scene: Sequence[float], robot: Sequence[float]
             frame_stack_env.obs_history = frame_stack_env._get_initial_obs_history(init_obs=obs)
             return frame_stack_env._get_stacked_obs_from_history()
         return obs
-    return env.reset_to(state)
+    obs = env.reset_to(state)
+    sync_button_logic_to_lights(env)
+    return obs
 
 
 def render_visual_camera(env, video_cfg: Dict[str, Any], suppress_output: bool = True) -> np.ndarray:
@@ -835,6 +866,14 @@ def save_rollout_artifacts(
         trace["initial_label"] = np.asarray(rollout["initial_label"], dtype=np.int32)
     if "final_label" in rollout:
         trace["final_label"] = np.asarray(rollout["final_label"], dtype=np.int32)
+    if "pre_settle_label" in rollout:
+        trace["pre_settle_label"] = np.asarray(rollout["pre_settle_label"], dtype=np.int32)
+    if "settle_scene_states" in rollout:
+        trace["settle_scene_states"] = np.asarray(rollout["settle_scene_states"], dtype=np.float32)
+    if "settle_robot_states" in rollout:
+        trace["settle_robot_states"] = np.asarray(rollout["settle_robot_states"], dtype=np.float32)
+    if "settle_action" in rollout:
+        trace["settle_action"] = np.asarray(rollout["settle_action"], dtype=np.float32)
     np.savez_compressed(trace_path, **trace)
     save_scene_snapshot(rollout["scene_snapshot"], scene_snapshot_path)
 

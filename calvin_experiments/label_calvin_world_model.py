@@ -6,7 +6,11 @@ from pathlib import Path
 import h5py
 import numpy as np
 import torch
-import corallab_stl.torch as stl
+
+try:
+    import corallab_stl.torch as stl
+except ImportError:
+    stl = None
 
 
 LABEL_NAMES = [
@@ -66,6 +70,26 @@ def label_scene_states_for_names(scene_states, label_names, label_thresholds=Non
     label_names = list(label_names)
     thresholds = dict(LEGACY_LABEL_THRESHOLDS if label_thresholds is None else label_thresholds)
     use_effect_state_for_switch = "switch_light" in thresholds
+
+    if stl is None:
+        switch_key = "lightbulb" if use_effect_state_for_switch else "switch"
+        switch_threshold_key = "switch_light" if use_effect_state_for_switch else "switch"
+        values = {
+            "switch_on": scene_states_t[:, SCENE_OBS_INDICES[switch_key]] - thresholds[switch_threshold_key],
+            "switch_off": thresholds[switch_threshold_key] - scene_states_t[:, SCENE_OBS_INDICES[switch_key]],
+            "button_on": scene_states_t[:, SCENE_OBS_INDICES["led"]] - thresholds["button_light"],
+            "button_off": thresholds["button_light"] - scene_states_t[:, SCENE_OBS_INDICES["led"]],
+            "button_pressed": scene_states_t[:, SCENE_OBS_INDICES["button"]] - thresholds["button_pressed"],
+            "drawer_open": scene_states_t[:, SCENE_OBS_INDICES["drawer"]] - thresholds["drawer"],
+            "drawer_closed": thresholds["drawer"] - scene_states_t[:, SCENE_OBS_INDICES["drawer"]],
+            "door_left": scene_states_t[:, SCENE_OBS_INDICES["slide"]] - thresholds["door"],
+            "door_right": thresholds["door"] - scene_states_t[:, SCENE_OBS_INDICES["slide"]],
+        }
+        unknown_labels = [name for name in label_names if name not in values]
+        if unknown_labels:
+            raise ValueError(f"Unknown CALVIN label names: {unknown_labels}")
+        labels = torch.stack([values[name] >= 0.0 for name in label_names], axis=-1)
+        return labels.cpu().numpy().astype(np.float32)
 
     state = stl.Var("state", dim=24)
 
