@@ -1,0 +1,19 @@
+{
+  "name": "button_on",
+  "description": "DynaGuide articulated-object setup copied from DynaGuide/calvin_exp_configs_examples/button_on.json.",
+  "source_config": "DynaGuide/calvin_exp_configs_examples/button_on.json",
+  "env_setup": {
+    "green_light": 0
+  },
+  "reset_poses": "reset_poses/initial_calvin_robot_states_midpoint.json",
+  "loc_target": [
+    -0.1183045814461375,
+    -0.1144538267241942,
+    0.4960556833337702
+  ],
+  "dynaguide_run_params": {
+    "scale": 1.0,
+    "ss": 4,
+    "alpha": 30
+  }
+}

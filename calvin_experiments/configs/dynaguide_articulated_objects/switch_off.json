@@ -1,0 +1,19 @@
+{
+  "name": "switch_off",
+  "description": "DynaGuide articulated-object setup copied from DynaGuide/calvin_exp_configs_examples/switch_off.json.",
+  "source_config": "DynaGuide/calvin_exp_configs_examples/switch_off.json",
+  "env_setup": {
+    "switch": 0.085
+  },
+  "reset_poses": "reset_poses/initial_calvin_robot_states_right_side_midpoint.json",
+  "loc_target": [
+    0.28656671011999846,
+    0.033852440810362,
+    0.5942648442738185
+  ],
+  "dynaguide_run_params": {
+    "scale": 1.5,
+    "ss": 4,
+    "alpha": 30
+  }
+}

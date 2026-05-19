@@ -1,0 +1,19 @@
+{
+  "name": "door_right",
+  "description": "DynaGuide articulated-object setup copied from DynaGuide/calvin_exp_configs_examples/door_right.json.",
+  "source_config": "DynaGuide/calvin_exp_configs_examples/door_right.json",
+  "env_setup": {
+    "sliding_door": 0.28
+  },
+  "reset_poses": "reset_poses/initial_calvin_robot_states_midpoint.json",
+  "loc_target": [
+    -0.22173902228443118,
+    -0.024977345601772248,
+    0.5462262406195053
+  ],
+  "dynaguide_run_params": {
+    "scale": 2.0,
+    "ss": 4,
+    "alpha": 15
+  }
+}

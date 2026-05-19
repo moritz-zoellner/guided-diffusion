@@ -1,0 +1,19 @@
+{
+  "name": "drawer_open",
+  "description": "DynaGuide articulated-object setup copied from DynaGuide/calvin_exp_configs_examples/drawer_open.json.",
+  "source_config": "DynaGuide/calvin_exp_configs_examples/drawer_open.json",
+  "env_setup": {
+    "drawer": 0
+  },
+  "reset_poses": "reset_poses/initial_calvin_robot_states_right_side_midpoint.json",
+  "loc_target": [
+    0.1466070830462435,
+    -0.21110382831263355,
+    0.4031764058751014
+  ],
+  "dynaguide_run_params": {
+    "scale": 1.0,
+    "ss": 4,
+    "alpha": 40
+  }
+}
