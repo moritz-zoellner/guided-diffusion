@@ -25,6 +25,7 @@ class AutomatonMLP(nn.Module):
         label_hidden=4,
         action_hidden=16,
         hidden_dim=32,
+        output_dim=4,
     ):
         super().__init__()
         self.state_enc = nn.Sequential(nn.Linear(state_dim, state_hidden), nn.SiLU(), nn.Linear(state_hidden, state_hidden), nn.SiLU())
@@ -35,7 +36,7 @@ class AutomatonMLP(nn.Module):
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, 4),
+            nn.Linear(hidden_dim, output_dim),
         )
 
     def forward(self, s_t, a_chunk, label_t):
@@ -121,6 +122,11 @@ def load_automaton_model_for_eval(
     action_chunk_dim_local = int(state_dict_local["action_enc.0.weight"].shape[1])
     action_hidden_local = int(state_dict_local["action_enc.0.weight"].shape[0])
     hidden_dim_local = int(state_dict_local["head.0.weight"].shape[0])
+    head_weight_keys = sorted(
+        [key for key in state_dict_local if key.startswith("head.") and key.endswith(".weight")],
+        key=lambda key: int(key.split(".")[1]),
+    )
+    output_dim_local = int(state_dict_local[head_weight_keys[-1]].shape[0])
 
     if predictor_kind == "learned":
         predictor_local = AutomatonMLP(
@@ -131,11 +137,12 @@ def load_automaton_model_for_eval(
             label_hidden=label_hidden_local,
             action_hidden=action_hidden_local,
             hidden_dim=hidden_dim_local,
+            output_dim=output_dim_local,
         ).to(device)
         predictor_local.load_state_dict(state_dict_local)
         predictor_local.eval()
     elif predictor_kind == "baseline_zero":
-        predictor_local = BaselineLogitPredictor(np.zeros(label_dim_local, dtype=np.float32)).to(device)
+        predictor_local = BaselineLogitPredictor(np.zeros(output_dim_local, dtype=np.float32)).to(device)
         predictor_local.eval()
     elif predictor_kind == "baseline_mean":
         label_mean = ckpt_local.get("label_mean")

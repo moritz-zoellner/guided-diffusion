@@ -32,6 +32,15 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+########
+#
+# GLOBAL TRAJECTORY LAYOUT
+# The Diffuser models full state-action trajectories. Each transition is
+# [action_x, action_y, agent_xy, blue_xy, red_xy, green_xy, yellow_xy].
+# The LTL/STL labels are derived from distances between the agent and blocks.
+#
+#######
+
 ACTION_DIM = 2
 OBS_DIM = 10
 TRANSITION_DIM = ACTION_DIM + OBS_DIM
@@ -50,10 +59,19 @@ LABEL_COLORS = {
 }
 
 
+########
+#
+# RUN CONFIGURATION
+# TrainConfig defines the offline full-trajectory diffusion model. EvalConfig
+# defines receding-horizon LTLDoG rollouts: sample H-step plans, execute the
+# first execute_steps actions in the real env, observe, and replan.
+#
+#######
+
 @dataclass
 class TrainConfig:
     data_path: str = "/home/shared/data/toy_squares/train/data.hdf5"
-    output_dir: str = "outputs/toy_squares_rollouts/baseline_ltldog/dog"
+    output_dir: str = "outputs/toy_squares_rollouts/baseline_ltldog/training/h128_full_diffuser"
     horizon: int = 128
     batch_size: int = 64
     train_steps: int = 20000
@@ -75,16 +93,19 @@ class TrainConfig:
 @dataclass
 class EvalConfig:
     checkpoint: str
-    output_dir: str = "outputs/toy_squares_rollouts/baseline_ltldog/dog"
+    output_dir: str = "outputs/toy_squares_rollouts/baseline_ltldog/rollouts/formula_suite_dataset_resets_ps_scale0p01_g5_exec8"
     data_path: str = "/home/shared/data/toy_squares/train/data.hdf5"
     formulas: str = "default"
     n_rollouts: int = 12
     env_horizon: int = 150
     execute_steps: int = 8
     batch_size: int = 4
-    guidance_scale: float = 0.12
-    n_guide_steps: int = 2
+    guidance_scale: float = 0.01
+    n_guide_steps: int = 5
     t_stopgrad: int = 2
+    guidance_mode: str = "ps"
+    scale_grad_by_std: bool = False
+    guidance_threshold: float = 0.0
     diffusion_steps: int = 100
     seed: int = 11
     device: str = "auto"
@@ -94,6 +115,15 @@ class EvalConfig:
     stop_on_contact: bool = False
     stop_on_satisfaction: bool = True
 
+
+########
+#
+# SMALL RUNTIME AND ENV HELPERS
+# These functions keep device/seed setup deterministic and convert between the
+# robomimic TouchCube observation dicts and the flat observation vectors used by
+# the trajectory model.
+#
+#######
 
 def get_device(name: str) -> torch.device:
     if name == "auto":
@@ -121,6 +151,15 @@ def raw_reset_state_from_obs(obs: np.ndarray) -> np.ndarray:
     rotations = np.zeros(4, dtype=np.float32)
     return np.concatenate([positions.reshape(-1), rotations], axis=0)
 
+
+########
+#
+# DATASET: FULL TRAJECTORIES FOR DIFFUSER
+# This dataset reads demonstration episodes from HDF5 and returns fixed-length
+# H-step windows. Short suffix windows are padded so the model always trains on
+# full trajectories with the first observation clamped as the conditioning state.
+#
+#######
 
 class ToySquaresTrajectoryDataset(Dataset):
     def __init__(
@@ -199,6 +238,15 @@ class ToySquaresTrajectoryDataset(Dataset):
         return out
 
 
+########
+#
+# TEMPORAL DENOISING MODEL
+# This is the neural network inside the Diffuser. Given a noisy H-step
+# state-action trajectory, diffusion timestep, and current observation, it
+# predicts the Gaussian noise that was added to the trajectory.
+#
+#######
+
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim: int):
         super().__init__()
@@ -262,6 +310,16 @@ class TemporalDenoiser(nn.Module):
         return self.out(h).transpose(1, 2)
 
 
+########
+#
+# DIFFUSION PROCESS AND LTLDoG-S GUIDANCE
+# GaussianTrajectoryDiffusion implements training noise prediction, reverse
+# denoising, and the LTLDoG-S-style gradient insertion step. When a guide is
+# passed to sample(), every reverse step can backprop differentiable robustness
+# through the predicted clean trajectory and nudge the noisy sample.
+#
+#######
+
 def cosine_beta_schedule(timesteps: int, s: float = 0.008) -> torch.Tensor:
     steps = timesteps + 1
     x = torch.linspace(0, timesteps, steps)
@@ -304,9 +362,14 @@ class GaussianTrajectoryDiffusion(nn.Module):
         self.register_buffer("posterior_mean_coef1", betas * torch.sqrt(alphas_cumprod_prev) / (1.0 - alphas_cumprod))
         self.register_buffer("posterior_mean_coef2", (1.0 - alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - alphas_cumprod))
 
-    def apply_conditioning(self, x: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+    def apply_conditioning(self, x: torch.Tensor, condition: torch.Tensor, freeze_static_blocks: bool = False) -> torch.Tensor:
         x = x.clone()
         x[:, 0, ACTION_DIM:] = condition
+        if freeze_static_blocks:
+            # Toy Squares block positions are fixed within an episode. Freezing
+            # these coordinates prevents guidance from satisfying formulas by
+            # hallucinating block motion that the real environment cannot execute.
+            x[:, :, ACTION_DIM + 2 : ACTION_DIM + OBS_DIM] = condition[:, None, 2:OBS_DIM]
         return x
 
     def q_sample(self, x_start: torch.Tensor, t: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
@@ -338,26 +401,53 @@ class GaussianTrajectoryDiffusion(nn.Module):
 
     @torch.no_grad()
     def sample(self, condition: torch.Tensor, batch_size: int, guide=None, sample_kwargs=None) -> Tuple[torch.Tensor, torch.Tensor]:
-        sample_kwargs = {} if sample_kwargs is None else sample_kwargs
+        sample_kwargs = {} if sample_kwargs is None else dict(sample_kwargs)
+        guidance_mode = sample_kwargs.pop("guidance_mode", "ps")
+        freeze_static_blocks = bool(sample_kwargs.pop("freeze_static_blocks", False))
         device = condition.device
         x = torch.randn(batch_size, self.horizon, self.transition_dim, device=device)
-        x = self.apply_conditioning(x, condition)
+        x = self.apply_conditioning(x, condition, freeze_static_blocks=freeze_static_blocks)
         values = torch.zeros(batch_size, device=device)
 
         for i in reversed(range(self.timesteps)):
             t = torch.full((batch_size,), i, device=device, dtype=torch.long)
             if guide is not None:
-                x, values = self.guided_step(x, condition, t, guide, **sample_kwargs)
+                # LTLDoG-S guidance path. The default "ps" mode matches the
+                # reference repo's posterior-sampling update; "pre_posterior"
+                # keeps the older simpler gradient-insertion ablation.
+                if guidance_mode == "ps":
+                    x, values = self.ps_guided_step(
+                        x,
+                        condition,
+                        t,
+                        guide,
+                        freeze_static_blocks=freeze_static_blocks,
+                        **sample_kwargs,
+                    )
+                elif guidance_mode == "pre_posterior":
+                    x, values = self.guided_step(
+                        x,
+                        condition,
+                        t,
+                        guide,
+                        freeze_static_blocks=freeze_static_blocks,
+                        **sample_kwargs,
+                    )
+                else:
+                    raise ValueError(f"Unknown guidance_mode: {guidance_mode}")
             else:
                 eps = self.model(x, t, condition)
                 x0 = self.predict_start_from_noise(x, t, eps).clamp(-1.0, 1.0)
-                x0 = self.apply_conditioning(x0, condition)
+                x0 = self.apply_conditioning(x0, condition, freeze_static_blocks=freeze_static_blocks)
                 mean, logvar = self.q_posterior(x0, x, t)
                 noise = torch.randn_like(x)
                 noise[t == 0] = 0
                 x = mean + torch.exp(0.5 * logvar) * noise
-                x = self.apply_conditioning(x, condition)
+                x = self.apply_conditioning(x, condition, freeze_static_blocks=freeze_static_blocks)
 
+        # This ordering is only a best-of-batch convenience after guided
+        # denoising. The baseline here is not pure sample-and-rank; with
+        # batch_size=1 this line has no practical effect.
         order = torch.argsort(values, descending=True)
         return x[order], values[order]
 
@@ -371,34 +461,131 @@ class GaussianTrajectoryDiffusion(nn.Module):
         n_guide_steps: int = 2,
         t_stopgrad: int = 2,
         scale_grad_by_std: bool = True,
+        freeze_static_blocks: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         model_var = extract(self.posterior_variance, t, x.shape)
         values = torch.zeros(x.shape[0], device=x.device)
         if int(t[0].item()) >= int(t_stopgrad):
             for _ in range(int(n_guide_steps)):
                 with torch.enable_grad():
+                    # Core LTLDoG-S insertion: estimate x0, score it with the
+                    # differentiable temporal-logic robustness, then move x_t
+                    # in the direction that increases that robustness.
                     x_grad = x.detach().requires_grad_(True)
                     eps = self.model(x_grad, t, condition)
                     x0 = self.predict_start_from_noise(x_grad, t, eps).clamp(-1.0, 1.0)
-                    x0 = self.apply_conditioning(x0, condition)
+                    x0 = self.apply_conditioning(x0, condition, freeze_static_blocks=freeze_static_blocks)
                     values = guide(x0)
                     grad = torch.autograd.grad(values.sum(), x_grad)[0]
                 if scale_grad_by_std:
                     grad = model_var * grad
-                x = self.apply_conditioning(x + float(scale) * grad.detach(), condition)
+                x = self.apply_conditioning(x + float(scale) * grad.detach(), condition, freeze_static_blocks=freeze_static_blocks)
 
         with torch.no_grad():
             eps = self.model(x, t, condition)
             x0 = self.predict_start_from_noise(x, t, eps).clamp(-1.0, 1.0)
-            x0 = self.apply_conditioning(x0, condition)
+            x0 = self.apply_conditioning(x0, condition, freeze_static_blocks=freeze_static_blocks)
             values = guide(x0)
             mean, logvar = self.q_posterior(x0, x, t)
             noise = torch.randn_like(x)
             noise[t == 0] = 0
             x = mean + torch.exp(0.5 * logvar) * noise
-            x = self.apply_conditioning(x, condition)
+            x = self.apply_conditioning(x, condition, freeze_static_blocks=freeze_static_blocks)
         return x, values
 
+    def ps_guided_step(
+        self,
+        x: torch.Tensor,
+        condition: torch.Tensor,
+        t: torch.Tensor,
+        guide,
+        scale: float = 0.1,
+        n_guide_steps: int = 2,
+        t_stopgrad: int = 2,
+        scale_grad_by_std: bool = False,
+        threshold: float = 0.0,
+        freeze_static_blocks: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        model_var = extract(self.posterior_variance, t, x.shape)
+        with torch.no_grad():
+            eps = self.model(x, t, condition)
+            x0 = self.predict_start_from_noise(x, t, eps).clamp(-1.0, 1.0)
+            x0 = self.apply_conditioning(x0, condition, freeze_static_blocks=freeze_static_blocks)
+            mean, logvar = self.q_posterior(x0, x, t)
+            noise = torch.randn_like(x)
+            noise[t == 0] = 0
+            x_next = mean + torch.exp(0.5 * logvar) * noise
+            x_next = self.apply_conditioning(x_next, condition, freeze_static_blocks=freeze_static_blocks)
+            values = self.guide_values_from_noisy(
+                x_next,
+                condition,
+                torch.clamp(t - 1, min=0),
+                guide,
+                freeze_static_blocks=freeze_static_blocks,
+            )
+            if torch.all(values > float(threshold)):
+                return x_next, values
+
+        if int(t[0].item()) >= int(t_stopgrad):
+            with torch.enable_grad():
+                # Reference LTLDoG-S posterior sampling: estimate x0 from the
+                # current noisy sample, backprop robustness through that x0,
+                # then use the gradient to correct the posterior x_{t-1}.
+                x_prev = x.detach().requires_grad_(True)
+                eps = self.model(x_prev, t, condition)
+                x0_hat = self.predict_start_from_noise(x_prev, t, eps).clamp(-1.0, 1.0)
+                x0_hat = self.apply_conditioning(x0_hat, condition, freeze_static_blocks=freeze_static_blocks)
+                values = guide(x0_hat)
+                grad = torch.autograd.grad(values.sum(), x_prev)[0]
+
+            if scale_grad_by_std:
+                grad = model_var * grad
+            active = (values <= float(threshold)).to(grad.dtype).reshape(-1, 1, 1)
+            grad = grad * active
+
+            for _ in range(int(n_guide_steps)):
+                if torch.all(values > float(threshold)):
+                    break
+                x_next = self.apply_conditioning(
+                    x_next + float(scale) * grad.detach(),
+                    condition,
+                    freeze_static_blocks=freeze_static_blocks,
+                )
+                with torch.no_grad():
+                    values = self.guide_values_from_noisy(
+                        x_next,
+                        condition,
+                        torch.clamp(t - 1, min=0),
+                        guide,
+                        freeze_static_blocks=freeze_static_blocks,
+                    )
+                    active = (values <= float(threshold)).to(grad.dtype).reshape(-1, 1, 1)
+                    grad = grad * active
+
+        return x_next.detach(), values.detach()
+
+    def guide_values_from_noisy(
+        self,
+        x: torch.Tensor,
+        condition: torch.Tensor,
+        t: torch.Tensor,
+        guide,
+        freeze_static_blocks: bool = False,
+    ) -> torch.Tensor:
+        eps = self.model(x, t, condition)
+        x0 = self.predict_start_from_noise(x, t, eps).clamp(-1.0, 1.0)
+        x0 = self.apply_conditioning(x0, condition, freeze_static_blocks=freeze_static_blocks)
+        return guide(x0)
+
+
+########
+#
+# TRAINING STABILIZER
+# The EMA copy is what we evaluate and save as best.pt/latest.pt. It smooths
+# noisy optimization updates and usually gives cleaner sampled trajectories than
+# the raw instantaneous model weights.
+#
+#######
 
 class EMAModel:
     def __init__(self, model: nn.Module, decay: float):
@@ -417,6 +604,15 @@ class EMAModel:
     def copy_to(self, model: nn.Module) -> None:
         model.load_state_dict(self.shadow, strict=True)
 
+
+########
+#
+# DIFFERENTIABLE TEMPORAL-LOGIC ROBUSTNESS
+# These smooth max/min operators make eventually, ordered visit, and
+# preceded-by formulas differentiable. The resulting scalar robustness is the
+# guide used by LTLDoG-S during reverse diffusion.
+#
+#######
 
 def smooth_max(x: torch.Tensor, dim=None, tau: float = 0.05) -> torch.Tensor:
     if dim is None:
@@ -527,9 +723,33 @@ class ToyLTLRobustness:
         return smooth_max(score, dim=1, tau=self.tau)
 
     def hard_satisfaction(self, observations_np: np.ndarray) -> Tuple[float, bool]:
-        obs = torch.as_tensor(observations_np[None], dtype=torch.float32)
-        with torch.no_grad():
-            value = float(self.__call__(torch.cat([torch.zeros(obs.shape[0], obs.shape[1], ACTION_DIM), obs], dim=-1))[0])
+        obs = np.asarray(observations_np, dtype=np.float32)
+        agent = obs[:, 0:2]
+        r = {}
+        for label, block_slice in LABEL_TO_BLOCK_SLICE.items():
+            block = obs[:, block_slice]
+            r[label] = self.radius - np.linalg.norm(agent - block, axis=-1)
+
+        kind = self.formula.kind
+        labels = self.formula.labels
+        if kind == "eventually":
+            value = float(np.max(r[labels[0]]))
+        elif kind == "sequence":
+            score = r[labels[0]]
+            for label in labels[1:]:
+                shifted_prefix = np.concatenate([np.asarray([-np.inf], dtype=np.float32), np.maximum.accumulate(score)[:-1]])
+                score = np.minimum(shifted_prefix, r[label])
+            value = float(np.max(score))
+        elif kind == "preceded_by_any":
+            target, pre_a, pre_b = labels
+            pre = np.maximum(r[pre_a], r[pre_b])
+            no_target_prefix = np.minimum.accumulate(-r[target])
+            event = np.minimum(pre, no_target_prefix)
+            shifted_prefix = np.concatenate([np.asarray([-np.inf], dtype=np.float32), np.maximum.accumulate(event)[:-1]])
+            target_after = np.minimum(shifted_prefix, r[target])
+            value = float(np.max(target_after))
+        else:
+            raise ValueError(f"Unknown formula kind: {kind}")
         return value, value > 0.0
 
 
@@ -546,6 +766,14 @@ def parse_formula_selection(selection: str, limit: int = 0) -> List[FormulaSpec]
         formulas = formulas[: int(limit)]
     return formulas
 
+
+########
+#
+# CHECKPOINT AND MODEL CONSTRUCTION
+# These helpers keep the train/eval code using the same architecture and load
+# EMA weights for rollout evaluation.
+#
+#######
 
 def build_model_from_config(config: Dict) -> GaussianTrajectoryDiffusion:
     model = TemporalDenoiser(
@@ -576,6 +804,15 @@ def load_checkpoint(path: str, device: torch.device) -> Tuple[GaussianTrajectory
     diffusion.eval()
     return diffusion, payload
 
+
+########
+#
+# TRAINING ENTRY POINT
+# This optimizes the Diffuser on demonstration trajectory windows with standard
+# denoising score matching. No LTL formula is used during training; the logic
+# enters only at sampling time through the guide.
+#
+#######
 
 def train(args: argparse.Namespace) -> None:
     config = TrainConfig(**{k: v for k, v in vars(args).items() if k != "func"})
@@ -660,6 +897,14 @@ def train(args: argparse.Namespace) -> None:
     plot_training_curves(output_dir / "metrics.json", output_dir / "training_curve.png")
 
 
+########
+#
+# TRAINING ARTIFACTS
+# The curve plot is a quick sanity check for underfitting/overfitting: training
+# loss should fall, and validation loss should track it without blowing up.
+#
+#######
+
 def plot_training_curves(metrics_path: Path, output_path: Path) -> None:
     metrics = json.loads(metrics_path.read_text())
     plt.figure(figsize=(7, 4), dpi=160)
@@ -677,6 +922,16 @@ def plot_training_curves(metrics_path: Path, output_path: Path) -> None:
     plt.savefig(output_path)
     plt.close()
 
+
+########
+#
+# ENVIRONMENT ROLLOUT AND RECEDING-HORIZON EVALUATION
+# This is where generated plans become actual env behavior. Each iteration
+# samples an LTL-guided full trajectory, executes only the first chunk, then
+# replans from the observed state. actual_satisfied is computed from this real
+# env trace; predicted_satisfied is only the first generated plan's satisfaction.
+#
+#######
 
 def make_env():
     import gym
@@ -720,6 +975,9 @@ def rollout_formula(
                 "scale": config.guidance_scale,
                 "n_guide_steps": config.n_guide_steps,
                 "t_stopgrad": config.t_stopgrad,
+                "guidance_mode": config.guidance_mode,
+                "scale_grad_by_std": config.scale_grad_by_std,
+                "threshold": config.guidance_threshold,
             },
         )
         sample = samples[0].detach().cpu().numpy()
@@ -787,6 +1045,15 @@ def rollout_formula(
         imageio.mimsave(formula_dir / f"rollout_{rollout_idx:03d}.mp4", frames, fps=10)
     return result
 
+
+########
+#
+# ROLLOUT PLOTS AND SUMMARY METRICS
+# Plots show the actual executed agent path against fixed block locations.
+# summary.json reports actual rollout success separately from predicted plan
+# satisfaction so receding-horizon correction is visible in the results.
+#
+#######
 
 def plot_formula_rollouts(formula_dir: Path, formula: FormulaSpec, results: List[Dict], max_rollouts: int = 12) -> None:
     n = min(max_rollouts, len(results))
@@ -873,6 +1140,14 @@ def summarize_results(results: List[Dict]) -> Dict:
         "contact_rate": float(np.mean([r["first_contact"] >= 0 for r in results])),
     }
 
+
+########
+#
+# COMMAND LINE INTERFACE
+# The file exposes two subcommands: train for fitting the Diffuser, and eval
+# for LTLDoG-S guided posterior sampling plus real TouchCube rollouts.
+#
+#######
 
 def add_train_parser(subparsers) -> None:
     parser = subparsers.add_parser("train")
