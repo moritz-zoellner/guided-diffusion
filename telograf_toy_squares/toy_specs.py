@@ -383,7 +383,7 @@ def padded_action_window(actions: np.ndarray, start: int, horizon: int) -> np.nd
     if len(window) <= 0:
         window = actions[-1:] if len(actions) else np.zeros((1, ACTION_DIM), dtype=np.float32)
     if len(window) < int(horizon):
-        pad = np.repeat(window[-1:], int(horizon) - len(window), axis=0)
+        pad = np.zeros((int(horizon) - len(window), ACTION_DIM), dtype=np.float32)
         window = np.concatenate([window, pad], axis=0)
     return window.astype(np.float32)
 

@@ -59,7 +59,8 @@ def test_padding_and_spec_vector():
     assert state_window.shape == (5, STATE_DIM)
     assert action_window.shape == (4, ACTION_DIM)
     assert np.allclose(state_window[-1], states[-1])
-    assert np.allclose(action_window[-1], actions[-1])
+    assert np.allclose(action_window[0], actions[0])
+    assert np.allclose(action_window[-1], np.zeros(ACTION_DIM, dtype=np.float32))
     vec = spec_to_vector({"type": "sequence", "labels": ["blue", "yellow", "green"], "radius": 0.2})
     assert vec.ndim == 1
     assert vec.dtype == np.float32

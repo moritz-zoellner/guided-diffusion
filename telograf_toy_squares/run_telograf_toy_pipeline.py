@@ -27,6 +27,13 @@ POLICY_CONFIGS = {
         "default_eval_samples": 512,
         "description": "clean single-reach primitive policy",
     },
+    "h64": {
+        "horizon": 64,
+        "default_epochs": 200,
+        "default_batch_size": 256,
+        "default_eval_samples": 512,
+        "description": "fixed-horizon single-reach policy matching TeLoGraF small-domain horizon",
+    },
     "h128": {
         "horizon": 128,
         "default_epochs": 200,
@@ -57,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--n-timesteps", type=int, default=100)
     parser.add_argument("--dim", type=int, default=64)
-    parser.add_argument("--dim-mults", type=int, nargs="+", default=[1, 2, 4])
+    parser.add_argument("--dim-mults", type=int, nargs="+", default=[1, 2, 4, 8])
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--eval-samples", type=int, default=None)
     parser.add_argument("--save-every", type=int, default=50)

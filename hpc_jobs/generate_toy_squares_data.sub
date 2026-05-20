@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #SBATCH -J toy_squares_data
 #SBATCH -A rpaleja
 #SBATCH -p a100-40gb
@@ -9,14 +9,29 @@
 #SBATCH -t 08:00:00
 #SBATCH -o slurm-%j.out
 
-module load conda
-conda activate guided_diffusion
+set -euo pipefail
 
-cd /home/zoellner/src/guided-diffusion
+module load conda
+
+CONDA_ENV=${CONDA_ENV:-guided_diffusion}
+REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
+OUT_DIR=${OUT_DIR:-${REPO_ROOT}/outputs/telograf/toy_squares/raw/full_10k}
+N_ROLLOUTS=${N_ROLLOUTS:-10000}
+
+conda activate "${CONDA_ENV}"
+
+cd "${REPO_ROOT}"
 start_time=$(date +%s)
 
-echo "Starting toy_squares dataset generation via SLURM"
-bash toy_squares/generate_data.sh
+echo "Starting Toy Squares TeLoGraF atomic dataset source generation"
+echo "out_dir=${OUT_DIR}"
+echo "n_rollouts=${N_ROLLOUTS}"
+echo "conda_env=${CONDA_ENV}"
+
+OUT_DIR="${OUT_DIR}" \
+N_ROLLOUTS="${N_ROLLOUTS}" \
+PYTHON_BIN="$(which python)" \
+bash telograf_toy_squares/generate_toy_squares_data.sh
 
 end_time=$(date +%s)
 elapsed=$((end_time - start_time))

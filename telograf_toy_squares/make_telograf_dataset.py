@@ -201,6 +201,14 @@ def main() -> None:
             "pre_event_steps": int(pre_event_steps),
             "radius": float(args.radius),
             "allow_padding": bool(allow_padding),
+            "training_scope": "atomic_eventual_only" if args.eventual_only else "selected_specs",
+            "composition_training": False if args.eventual_only else None,
+            "composition_note": (
+                "Only atomic F(reach_color) behavior chunks are mined for TeLoGraF training. "
+                "Composite Toy Squares STLs are intentionally held out for evaluation."
+                if args.eventual_only
+                else "Specs were selected by the provided arguments/recommendation."
+            ),
             "state_dim": STATE_DIM,
             "action_dim": ACTION_DIM,
             "num_records": int(len(records)),

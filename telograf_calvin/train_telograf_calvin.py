@@ -123,6 +123,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--smoke", action="store_true", help="One fast epoch over a small subset.")
     parser.add_argument("--skip-sampling", action="store_true")
+    parser.add_argument(
+        "--require-telograf-backend",
+        action="store_true",
+        help="Fail instead of using the local fallback if TeLoGraF z_diffuser cannot be imported.",
+    )
     return parser.parse_args()
 
 
@@ -318,6 +323,11 @@ def main() -> None:
         ).to(device)
     else:
         backend = "local_flow_fallback"
+        if args.require_telograf_backend:
+            raise RuntimeError(
+                "TeLoGraF z_diffuser backend is required but unavailable: "
+                f"{TELOGRAF_BACKEND_IMPORT_ERROR}"
+            )
         print(f"TeLoGraF z_diffuser unavailable, using local flow fallback: {TELOGRAF_BACKEND_IMPORT_ERROR}")
         model = LocalTemporalFlowNet(DATA_DIM, cond_dim, max(args.dim, 16)).to(device)
         diffuser = LocalGaussianFlow(model, horizon=horizon, transition_dim=DATA_DIM, n_timesteps=args.n_timesteps).to(device)

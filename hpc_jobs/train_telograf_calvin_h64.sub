@@ -1,0 +1,78 @@
+#!/bin/bash
+#SBATCH -J telograf_calvin_h64
+#SBATCH -A rpaleja
+#SBATCH -p a100-40gb
+#SBATCH --cpus-per-task=8
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=96G
+#SBATCH --qos=normal
+#SBATCH -t 24:00:00
+#SBATCH -o slurm-%j.out
+
+set -euo pipefail
+
+module load conda
+
+# Override at submission time if your cluster env / path differs:
+#   CONDA_ENV=guided_diffusion sbatch hpc_jobs/train_telograf_calvin_h64.sub
+#   DATASET=/path/to/calvin.hdf5 sbatch hpc_jobs/train_telograf_calvin_h64.sub
+CONDA_ENV=${CONDA_ENV:-calvin}
+REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
+DATASET=${DATASET:-${REPO_ROOT}/data/calvin.hdf5}
+OUTPUT_ROOT=${OUTPUT_ROOT:-${REPO_ROOT}/outputs/telograf}
+DATASET_NAME=${DATASET_NAME:-calvin_play_eventual_h64}
+RUN_NAME=${RUN_NAME:-calvin_play_eventual_h64_telograf}
+RUN_DIAGNOSTICS=${RUN_DIAGNOSTICS:-0}
+
+conda activate "${CONDA_ENV}"
+
+export MPLCONFIGDIR=${MPLCONFIGDIR:-/tmp/matplotlib}
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+unset DISPLAY
+
+cd "${REPO_ROOT}"
+start_time=$(date +%s)
+
+echo "Starting TeLoGraF CALVIN H=64 single-behavior pipeline"
+echo "dataset=${DATASET}"
+echo "output_root=${OUTPUT_ROOT}"
+echo "conda_env=${CONDA_ENV}"
+
+if [ "${RUN_DIAGNOSTICS}" = "1" ]; then
+  python -u -m telograf_calvin.diagnose_play_data \
+    --dataset "${DATASET}" \
+    --output-root "${OUTPUT_ROOT}/diagnostics" \
+    --horizon 64 \
+    --pre-event-steps 16 \
+    --skip-plots
+else
+  echo "Skipping composite diagnostics. Training data is atomic-eventual only."
+fi
+
+python -u -m telograf_calvin.make_telograf_dataset \
+  --dataset "${DATASET}" \
+  --output-root "${OUTPUT_ROOT}/datasets" \
+  --name "${DATASET_NAME}" \
+  --horizon 64 \
+  --pre-event-steps 16 \
+  --eventual-only \
+  --max-per-spec 5000
+
+python -u -m telograf_calvin.train_telograf_calvin \
+  --data "${OUTPUT_ROOT}/datasets/${DATASET_NAME}/data.npz" \
+  --output-root "${OUTPUT_ROOT}/runs" \
+  --name "${RUN_NAME}" \
+  --epochs 200 \
+  --batch-size 256 \
+  --lr 3e-4 \
+  --n-timesteps 100 \
+  --dim 64 \
+  --dim-mults 1 2 4 8 \
+  --num-workers 4 \
+  --eval-samples 512 \
+  --save-every 25 \
+  --require-telograf-backend
+
+end_time=$(date +%s)
+elapsed=$((end_time - start_time))
+echo "Finished TeLoGraF CALVIN H=64. elapsed_seconds=${elapsed}"

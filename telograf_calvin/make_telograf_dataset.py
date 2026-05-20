@@ -18,6 +18,7 @@ from telograf_calvin.paper_specs import (
     STATE_DIM,
     core_paper_specs,
     deoverlap_windows,
+    diagnostic_specs,
     ensure_output_dir,
     hdf5_demo_splits,
     iter_spec_windows,
@@ -40,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-windows", type=int, default=None)
     parser.add_argument("--include-sparse-core", action="store_true")
     parser.add_argument("--pilot-only", action="store_true", help="Drop trainable extras; keep pilot/core specs only.")
+    parser.add_argument("--eventual-only", action="store_true", help="Mine only atomic F label specs.")
     parser.add_argument("--seed", type=int, default=7)
     return parser.parse_args()
 
@@ -49,8 +51,12 @@ def load_specs(args: argparse.Namespace) -> tuple[List[Dict], int, int, Dict]:
     if args.recommendation is None:
         horizon = 128 if args.horizon is None else int(args.horizon)
         pre_event_steps = 16 if args.pre_event_steps is None else int(args.pre_event_steps)
-        specs = core_paper_specs(include_gripper=True)
-        meta["spec_source"] = "core_paper_specs"
+        if args.eventual_only:
+            specs = [spec for spec in diagnostic_specs(include_triples=False, include_gripper=False) if spec["type"] == "eventual"]
+            meta["spec_source"] = "diagnostic_specs_eventual_only"
+        else:
+            specs = core_paper_specs(include_gripper=True)
+            meta["spec_source"] = "core_paper_specs"
         return specs, horizon, pre_event_steps, meta
 
     with args.recommendation.open("r") as f:
@@ -69,6 +75,8 @@ def load_specs(args: argparse.Namespace) -> tuple[List[Dict], int, int, Dict]:
             specs.append(spec)
     if args.pilot_only:
         specs = [spec for spec in specs if spec.get("status") in {"pilot", "sparse"} or spec.get("id", "").startswith("paper_")]
+    if args.eventual_only:
+        specs = [spec for spec in specs if spec.get("type") == "eventual"]
     meta["spec_source"] = str(args.recommendation)
     meta["diagnostics"] = recommendation
     return specs, horizon, pre_event_steps, meta
@@ -169,6 +177,14 @@ def main() -> None:
             "dataset": str(args.dataset),
             "horizon": int(horizon),
             "pre_event_steps": int(pre_event_steps),
+            "training_scope": "atomic_eventual_only" if args.eventual_only else "selected_specs",
+            "composition_training": False if args.eventual_only else None,
+            "composition_note": (
+                "Only atomic F(label) behavior chunks are mined for TeLoGraF training. "
+                "Composite paper STLs are intentionally held out for evaluation."
+                if args.eventual_only
+                else "Specs were selected by the provided arguments/recommendation."
+            ),
             "state_dim": STATE_DIM,
             "action_dim": ACTION_DIM,
             "num_records": int(len(records)),
