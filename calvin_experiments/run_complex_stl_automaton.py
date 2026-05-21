@@ -51,7 +51,6 @@ import robomimic.utils.torch_utils as TorchUtils
 from calvin_experiments import calvin_rollout_utils as CRU
 from calvin_experiments.label_calvin_world_model import label_scene_states_for_names
 from calvin_experiments.run_dynaguide_articulated_automaton import (
-    DEFAULT_RESET_ROBOT_Y_MIN,
     DEFAULT_RESET_SWITCH_CLEARANCE,
     DEFAULT_SETTLE_GRIPPER,
     DEFAULT_SETTLE_STEPS,
@@ -71,7 +70,7 @@ from calvin_experiments.run_dynaguide_articulated_automaton import (
 from calvin_experiments.train_dynamics_world_model import load_dynamics_model_for_eval
 
 
-DEFAULT_SCENE_CONFIG = Path("calvin_experiments/configs/blocks_hidden.json")
+DEFAULT_SCENE_CONFIG = Path("calvin_experiments/configs/robust_direction_initial.json")
 DEFAULT_OUTPUT_ROOT = Path("outputs/calvin_paper/complex-behaviors")
 DEFAULT_COMPLEX_POLICY_CKPT = Path("outputs/calvin/base_policy/calvin_D_base_dp/20260501015147/models/model_epoch_280.pth")
 DEFAULT_COMPLEX_AUTOMATON_CKPT = Path(
@@ -82,9 +81,14 @@ DEFAULT_DYNAMICS_CKPT = Path(
 )
 DEFAULT_RESET_POSE_DIR = Path("calvin_experiments/configs/dynaguide_articulated_objects/reset_poses")
 DEFAULT_RESET_POSE_FILES = (
+    DEFAULT_RESET_POSE_DIR / "initial_calvin_robot_states_constrained.json",
     DEFAULT_RESET_POSE_DIR / "initial_calvin_robot_states_midpoint.json",
     DEFAULT_RESET_POSE_DIR / "initial_calvin_robot_states_right_side_midpoint.json",
 )
+DEFAULT_COMPLEX_RESET_ROBOT_X_MIN = 0.0
+DEFAULT_COMPLEX_RESET_ROBOT_X_MAX = 0.2
+DEFAULT_COMPLEX_RESET_ROBOT_Y_MIN = -0.25
+DEFAULT_COMPLEX_RESET_ROBOT_Y_MAX = -0.15
 VIDEO_FPS = 30
 GRIPPER_WIDTH_RAW_ROBOT_IDX = 6
 
@@ -145,61 +149,58 @@ COMPLEX_STL_SPECS: Dict[str, ComplexSTLSpec] = {
     "F_a_or_F_b": ComplexSTLSpec(
         name="F_a_or_F_b",
         mode="or",
-        formula="F switch_on OR F button_on",
-        target_names=("switch_on", "button_on"),
+        formula="F button_pressed OR F switch_off",
+        target_names=("button_pressed", "switch_off"),
         default_horizon=250,
         default_n_candidates=16,
-        prompt="turn on either the lightbulb with the switch or the LED with the button",
+        prompt="press the button or turn off the lightbulb with the switch",
     ),
     "F_a_and_F_b": ComplexSTLSpec(
         name="F_a_and_F_b",
         mode="and",
-        formula="F switch_on AND F button_on",
-        target_names=("switch_on", "button_on"),
+        formula="F button_pressed AND F switch_off",
+        target_names=("button_pressed", "switch_off"),
         default_horizon=350,
         default_n_candidates=16,
-        prompt="turn on the lightbulb with the switch and turn on the LED with the button",
+        prompt="press the button and turn off the lightbulb with the switch",
     ),
     "F_button_then_F_drawer": ComplexSTLSpec(
         name="F_button_then_F_drawer",
         mode="chain",
-        formula="F(button_on -> F drawer_open -> F switch_on -> F button_pressed -> F door_left -> F drawer_closed)",
-        target_names=("button_on", "drawer_open", "switch_on", "button_pressed", "door_left", "drawer_closed"),
+        formula="F(drawer_closed -> F switch_off -> F button_pressed -> F door_right -> F drawer_open)",
+        target_names=("drawer_closed", "switch_off", "button_pressed", "door_right", "drawer_open"),
         default_horizon=700,
         default_n_candidates=16,
-        prompt=(
-            "first turn on the LED with the button, then open the drawer, then turn on the lightbulb "
-            "with the switch, then press the button, then move the sliding door left, and finally close the drawer"
-        ),
+        prompt="close the drawer, then turn off the lightbulb with the switch, then press the button, then move the sliding door right, and finally open the drawer",
     ),
     "F_drawer_after_button_switch": ComplexSTLSpec(
         name="F_drawer_after_button_switch",
         mode="ordered_stage",
-        formula="F drawer_open AND (!drawer_open U (button_on AND switch_on))",
-        stage_target_names=(("button_on", "switch_on"), ("drawer_open",)),
-        default_horizon=500,
+        formula="F drawer_closed AND (!drawer_closed U (button_pressed AND switch_off))",
+        stage_target_names=(("button_pressed", "switch_off"), ("drawer_closed",)),
+        default_horizon=450,
         default_n_candidates=16,
-        prompt="turn on the LED with the button and turn on the lightbulb with the switch before opening the drawer",
+        prompt="press the button and turn off the lightbulb with the switch before closing the drawer",
     ),
     "F_drawer_G_constraint": ComplexSTLSpec(
         name="F_drawer_G_constraint",
         mode="target",
-        formula="F drawer_open AND G gripper_open",
-        target_names=("drawer_open",),
+        formula="F drawer_closed AND G gripper_open",
+        target_names=("drawer_closed",),
         safety_kind="gripper_open",
         default_horizon=250,
         default_n_candidates=16,
-        prompt="open the drawer while keeping the gripper open",
+        prompt="close the drawer while keeping the gripper open",
     ),
     "F_switch_G_safety": ComplexSTLSpec(
         name="F_switch_G_safety",
         mode="target",
-        formula="F switch_on AND G avoid_unsafe_square",
-        target_names=("switch_on",),
+        formula="F switch_off AND G avoid_unsafe_square",
+        target_names=("switch_off",),
         safety_kind="eef_avoid_box",
         default_horizon=220,
         default_n_candidates=16,
-        prompt="turn on the lightbulb with the switch while keeping the robot arm out of the unsafe square",
+        prompt="turn off the lightbulb with the switch while keeping the robot arm out of the unsafe square",
     ),
 }
 TASK_ORDER = tuple(COMPLEX_STL_SPECS)
@@ -233,6 +234,55 @@ def load_reset_pose_pool(paths: Sequence[Path]) -> tuple[list[np.ndarray], Dict[
         poses.extend(states)
         sources.append({"path": str(path), "count": len(states)})
     return poses, {"sources": sources, "total_count": len(poses)}
+
+
+def filter_complex_reset_poses(
+    poses: Sequence[np.ndarray],
+    *,
+    robot_x_min: Optional[float],
+    robot_x_max: Optional[float],
+    robot_y_min: Optional[float],
+    robot_y_max: Optional[float],
+    switch_clearance: Optional[float],
+) -> tuple[list[np.ndarray], Dict[str, Any]]:
+    base_filtered, filter_meta = filter_reset_poses(
+        list(poses),
+        robot_y_min=robot_y_min,
+        robot_y_max=robot_y_max,
+        switch_clearance=switch_clearance,
+    )
+    filtered = list(base_filtered or [])
+    if robot_x_min is not None:
+        filtered = [pose for pose in filtered if float(pose[0]) >= float(robot_x_min)]
+    after_robot_x_min = len(filtered)
+    if robot_x_max is not None:
+        filtered = [pose for pose in filtered if float(pose[0]) <= float(robot_x_max)]
+    after_robot_x_max = len(filtered)
+    if not filtered:
+        raise ValueError(
+            "Complex-STL reset-pose XY frame removed every pose "
+            f"(x_min={robot_x_min}, x_max={robot_x_max}, y_min={robot_y_min}, y_max={robot_y_max}, "
+            f"switch_clearance={switch_clearance})"
+        )
+    frame_enabled = any(
+        value is not None
+        for value in (robot_x_min, robot_x_max, robot_y_min, robot_y_max, switch_clearance)
+    )
+    return filtered, {
+        **filter_meta,
+        "enabled": bool(frame_enabled),
+        "after_robot_x_min": int(after_robot_x_min),
+        "after_robot_x_max": int(after_robot_x_max),
+        "filtered_count": int(len(filtered)),
+        "robot_x_min": None if robot_x_min is None else float(robot_x_min),
+        "robot_x_max": None if robot_x_max is None else float(robot_x_max),
+        "xy_frame": {
+            "x_min": None if robot_x_min is None else float(robot_x_min),
+            "x_max": None if robot_x_max is None else float(robot_x_max),
+            "y_min": None if robot_y_min is None else float(robot_y_min),
+            "y_max": None if robot_y_max is None else float(robot_y_max),
+        },
+    }
 
 
 def make_fixed_scene_robot(
@@ -1419,7 +1469,7 @@ def _task_label(task: str) -> str:
     labels = {
         "F_a_or_F_b": "F a OR F b",
         "F_a_and_F_b": "F a AND F b",
-        "F_button_then_F_drawer": "6-step chain",
+        "F_button_then_F_drawer": "long chain",
         "F_drawer_after_button_switch": "drawer after\nbutton+switch",
         "F_drawer_G_constraint": "drawer +\ngripper safe",
         "F_switch_G_safety": "switch +\navoid box",
@@ -1534,7 +1584,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy-ckpt", type=Path, default=DEFAULT_COMPLEX_POLICY_CKPT)
     parser.add_argument("--automaton-ckpt", type=Path, default=DEFAULT_COMPLEX_AUTOMATON_CKPT)
     parser.add_argument("--dynamics-ckpt", type=Path, default=DEFAULT_DYNAMICS_CKPT)
-    parser.add_argument("--scene-config", type=Path, default=DEFAULT_SCENE_CONFIG)
+    parser.add_argument("--scene-config", type=Path, default=None)
     parser.add_argument("--visualization-config", type=Path, default=DEFAULT_VISUALIZATION_CONFIG)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--name", default=None)
@@ -1545,7 +1595,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         choices=TASK_ORDER,
         help=(
-            "Optional subset of paper STL tasks to run. Omit this flag, or pass it with no values, "
+            "Optional subset of complex STL tasks to run. Omit this flag, or pass it with no values, "
             f"to run all tasks: {', '.join(TASK_ORDER)}."
         ),
     )
@@ -1558,18 +1608,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fixed-reset-pose-index",
         type=int,
-        default=0,
-        help="Use one deterministic robot reset pose from the filtered pose pool. Default keeps every rollout at the same robot start.",
+        default=None,
+        help="Use one deterministic robot reset pose from the filtered pose pool. By default, each rollout samples from the constrained pool.",
     )
     parser.add_argument(
         "--sample-reset-poses",
         action="store_true",
-        help="Restore the older behavior: sample a reset pose from the filtered pool for each rollout seed.",
+        help="Sample a reset pose from the filtered pool for each rollout seed. This is now the default.",
     )
     parser.add_argument("--settle-steps", type=int, default=DEFAULT_SETTLE_STEPS)
     parser.add_argument("--settle-gripper", type=float, default=DEFAULT_SETTLE_GRIPPER)
-    parser.add_argument("--reset-robot-y-min", type=float, default=DEFAULT_RESET_ROBOT_Y_MIN)
-    parser.add_argument("--reset-robot-y-max", type=float, default=None)
+    parser.add_argument("--reset-robot-x-min", type=float, default=DEFAULT_COMPLEX_RESET_ROBOT_X_MIN)
+    parser.add_argument("--reset-robot-x-max", type=float, default=DEFAULT_COMPLEX_RESET_ROBOT_X_MAX)
+    parser.add_argument("--reset-robot-y-min", type=float, default=DEFAULT_COMPLEX_RESET_ROBOT_Y_MIN)
+    parser.add_argument("--reset-robot-y-max", type=float, default=DEFAULT_COMPLEX_RESET_ROBOT_Y_MAX)
     parser.add_argument("--reset-switch-clearance", type=float, default=DEFAULT_RESET_SWITCH_CLEARANCE)
     parser.add_argument("--disable-reset-pose-filter", action="store_true")
     parser.add_argument("--disable-safety-refinement", action="store_true")
@@ -1593,6 +1645,8 @@ def main() -> None:
     args = parse_args()
     tasks = list(args.tasks) if args.tasks else list(TASK_ORDER)
     specs = [COMPLEX_STL_SPECS[task] for task in tasks]
+    reset_robot_x_min = None if args.disable_reset_pose_filter else args.reset_robot_x_min
+    reset_robot_x_max = None if args.disable_reset_pose_filter else args.reset_robot_x_max
     reset_robot_y_min = None if args.disable_reset_pose_filter else args.reset_robot_y_min
     reset_robot_y_max = None if args.disable_reset_pose_filter else args.reset_robot_y_max
     reset_switch_clearance = None if args.disable_reset_pose_filter else args.reset_switch_clearance
@@ -1600,18 +1654,21 @@ def main() -> None:
     policy_ckpt_candidate = repo_path(args.policy_ckpt)
     automaton_ckpt_candidate = repo_path(args.automaton_ckpt)
     dynamics_ckpt_candidate = repo_path(args.dynamics_ckpt)
-    scene_config_path = resolve_existing_path(repo_path(args.scene_config))
+    scene_config_arg = args.scene_config or DEFAULT_SCENE_CONFIG
+    scene_config_path = resolve_existing_path(repo_path(scene_config_arg))
     visualization_config = resolve_existing_path(repo_path(args.visualization_config))
     reset_pose_paths = resolve_reset_pose_paths(args.reset_pose_files)
     reset_pose_pool, reset_pose_meta = load_reset_pose_pool(reset_pose_paths)
-    reset_poses, reset_pose_filter = filter_reset_poses(
+    reset_poses, reset_pose_filter = filter_complex_reset_poses(
         reset_pose_pool,
+        robot_x_min=reset_robot_x_min,
+        robot_x_max=reset_robot_x_max,
         robot_y_min=reset_robot_y_min,
         robot_y_max=reset_robot_y_max,
         switch_clearance=reset_switch_clearance,
     )
     reset_pose_filter = {**reset_pose_filter, **reset_pose_meta}
-    fixed_reset_pose_index = None if args.sample_reset_poses else int(args.fixed_reset_pose_index)
+    fixed_reset_pose_index = None if args.sample_reset_poses or args.fixed_reset_pose_index is None else int(args.fixed_reset_pose_index)
 
     if args.safety_box is None:
         safety_box = SafetyBox()
@@ -1640,6 +1697,7 @@ def main() -> None:
         "output_dir": str(run_dir),
         "requested_name": args.name,
         "run_name": run_dir.name,
+        "scene_config_arg": str(scene_config_arg),
         "tasks": tasks,
         "task_specs": [
             {

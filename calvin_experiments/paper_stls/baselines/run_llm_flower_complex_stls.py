@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""Run FLOWER VLA on the complex CALVIN paper-STL tasks.
+"""Run an LLM-planned FLOWER VLA baseline on the complex CALVIN STL tasks.
 
-This mirrors `calvin_experiments/run_complex_stl_automaton.py`, but executes a
-single language-conditioned FLOWER policy command for each STL task.
+This baseline gives the STL formula to a language planner once, before the
+rollout.  The planner returns a fixed list of natural-language CALVIN primitive
+commands, and FLOWER executes that list with a fixed time budget per command.
+
+For fairness, the online controller does not use proposition labels, world-model
+scores, or STL robustness to decide which command to run next.  Labels are used
+only for post-hoc evaluation and optional early termination after the full STL
+is already satisfied.  Safety terms are expressed as plain language modifiers,
+not as oracle geometry or extra controller logic.
 """
 
 from __future__ import annotations
@@ -10,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
 import sys
 import time
 from dataclasses import asdict
@@ -29,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 FLOWER_ROOT = REPO_ROOT / "flower_vla_calvin"
 DEFAULT_FLOWER_CHECKPOINT = REPO_ROOT / "outputs/calvin/baselines/flower/flower_calvin_d"
 DEFAULT_ENV_CHECKPOINT = REPO_ROOT / "outputs/calvin/base_policy/calvin_D_base_dp/20260501015147/models/model_epoch_280.pth"
-DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs/calvin_paper/complex-behaviors/baselines/flower"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs/calvin_paper/complex-behaviors/baselines/llm_flower"
 
 for path in [
     REPO_ROOT,
@@ -47,7 +53,6 @@ import robomimic.envs  # noqa: F401
 import robomimic.utils.file_utils as FileUtils
 
 from calvin_experiments import calvin_rollout_utils as CRU
-from calvin_experiments.label_calvin_world_model import LABEL_NAMES, LABEL_THRESHOLDS, label_scene_states_for_names
 from calvin_experiments.run_complex_stl_automaton import (
     COMPLEX_STL_SPECS,
     DEFAULT_COMPLEX_RESET_ROBOT_X_MAX,
@@ -84,145 +89,138 @@ from calvin_experiments.run_dynaguide_articulated_automaton import (
     settle_metrics,
     write_json,
 )
+from run_flower_complex_stls import SpecMonitor, labels_for_scene
 from flower_our_env_rollout import FlowerPolicyAdapter, load_flower_model, resolve_device
 
 
-def labels_for_scene(scene: Sequence[float]) -> np.ndarray:
-    return label_scene_states_for_names(
-        np.asarray(scene, dtype=np.float32)[None, :],
-        LABEL_NAMES,
-        LABEL_THRESHOLDS,
-    )[0].astype(np.float32)
+LLM_PRIMITIVE_GROUNDING: Dict[str, str] = {
+    "button_pressed": "press the button to turn on the led light",
+    "switch_off": "use the switch to turn off the light bulb",
+    "drawer_closed": "push the handle to close the drawer",
+    "drawer_open": "pull the handle to open the drawer",
+    "door_right": "push the sliding door to the right side",
+}
 
 
-class SpecMonitor:
-    def __init__(self, spec):
-        self.spec = spec
-        self.events: list[Dict[str, Any]] = []
-        self.violations: list[Dict[str, Any]] = []
-        self.done = False
-        self.pos = 0
-        self.stage_pos = 0
-        self.achieved = set()
-        self.stage_achieved = [set() for _ in spec.stage_target_names]
-        self.violation_keys = set()
-
-    def idx(self, name: str) -> int:
-        if name not in LABEL_NAMES:
-            raise ValueError(f"Unknown label {name}; labels={LABEL_NAMES}")
-        return LABEL_NAMES.index(name)
-
-    def sync(self, label: np.ndarray, step: int) -> bool:
-        if self.spec.mode == "or":
-            return self._sync_or(label, step)
-        if self.spec.mode == "and":
-            return self._sync_and(label, step)
-        if self.spec.mode == "chain":
-            return self._sync_chain(label, step)
-        if self.spec.mode == "ordered_stage":
-            return self._sync_ordered_stage(label, step)
-        if self.spec.mode == "target":
-            return self._sync_target(label, step)
-        raise ValueError(f"Unsupported mode: {self.spec.mode}")
-
-    def _sync_or(self, label: np.ndarray, step: int) -> bool:
-        if self.done:
-            return False
-        for name in self.spec.target_names:
-            idx = self.idx(name)
-            if float(label[idx]) > 0.5:
-                self.events.append({"step": int(step), "target_idx": int(idx), "target_name": name})
-                self.done = True
-                return True
-        return False
-
-    def _sync_and(self, label: np.ndarray, step: int) -> bool:
-        advanced = False
-        for name in self.spec.target_names:
-            idx = self.idx(name)
-            if idx not in self.achieved and float(label[idx]) > 0.5:
-                self.achieved.add(idx)
-                self.events.append({"step": int(step), "target_idx": int(idx), "target_name": name})
-                advanced = True
-        self.done = len(self.achieved) == len(self.spec.target_names)
-        return advanced
-
-    def _sync_chain(self, label: np.ndarray, step: int) -> bool:
-        advanced = False
-        while self.pos < len(self.spec.target_names):
-            name = self.spec.target_names[self.pos]
-            idx = self.idx(name)
-            if float(label[idx]) <= 0.5:
-                break
-            self.events.append({"step": int(step), "target_idx": int(idx), "target_name": name})
-            self.pos += 1
-            advanced = True
-        self.done = self.pos >= len(self.spec.target_names)
-        return advanced
-
-    def _record_future_stage_violations(self, label: np.ndarray, step: int) -> None:
-        for future_stage_idx in range(max(1, self.stage_pos + 1), len(self.spec.stage_target_names)):
-            for name in self.spec.stage_target_names[future_stage_idx]:
-                idx = self.idx(name)
-                key = (future_stage_idx, idx)
-                if key not in self.violation_keys and float(label[idx]) > 0.5:
-                    self.violation_keys.add(key)
-                    self.violations.append(
-                        {
-                            "step": int(step),
-                            "stage_idx": int(future_stage_idx),
-                            "target_idx": int(idx),
-                            "target_name": name,
-                            "message": "future-stage target became true before prior stages completed",
-                        }
-                    )
-
-    def _sync_ordered_stage(self, label: np.ndarray, step: int) -> bool:
-        advanced = False
-        if self.stage_pos < len(self.spec.stage_target_names):
-            self._record_future_stage_violations(label, step)
-        while self.stage_pos < len(self.spec.stage_target_names):
-            stage = self.spec.stage_target_names[self.stage_pos]
-            for name in stage:
-                idx = self.idx(name)
-                if idx not in self.stage_achieved[self.stage_pos] and float(label[idx]) > 0.5:
-                    self.stage_achieved[self.stage_pos].add(idx)
-                    self.events.append(
-                        {
-                            "step": int(step),
-                            "stage_idx": int(self.stage_pos),
-                            "target_idx": int(idx),
-                            "target_name": name,
-                        }
-                    )
-                    advanced = True
-            if len(self.stage_achieved[self.stage_pos]) == len(stage):
-                self.stage_pos += 1
-                advanced = True
-                continue
-            break
-        self.done = self.stage_pos >= len(self.spec.stage_target_names)
-        return advanced
-
-    def _sync_target(self, label: np.ndarray, step: int) -> bool:
-        if self.done:
-            return False
-        name = self.spec.target_names[0]
-        idx = self.idx(name)
-        if float(label[idx]) > 0.5:
-            self.events.append({"step": int(step), "target_idx": int(idx), "target_name": name})
-            self.done = True
-            return True
-        return False
+LLM_TASK_PLANS: Dict[str, Dict[str, Any]] = {
+    "F_a_or_F_b": {
+        "planner_input": "F button_pressed OR F switch_off",
+        "strategy": "Satisfy the first disjunct with an available primitive command.",
+        "dropped_clauses": [],
+        "commands": [
+            {"target": "button_pressed", "instruction": LLM_PRIMITIVE_GROUNDING["button_pressed"]},
+        ],
+    },
+    "F_a_and_F_b": {
+        "planner_input": "F button_pressed AND F switch_off",
+        "strategy": "Linearize the unordered eventual goals into primitive commands.",
+        "dropped_clauses": [],
+        "commands": [
+            {"target": "button_pressed", "instruction": LLM_PRIMITIVE_GROUNDING["button_pressed"]},
+            {"target": "switch_off", "instruction": LLM_PRIMITIVE_GROUNDING["switch_off"]},
+        ],
+    },
+    "F_button_then_F_drawer": {
+        "planner_input": "F(drawer_closed -> F switch_off -> F button_pressed -> F door_right -> F drawer_open)",
+        "strategy": "Preserve the ordered chain exactly as primitive commands.",
+        "dropped_clauses": [],
+        "commands": [
+            {"target": "drawer_closed", "instruction": LLM_PRIMITIVE_GROUNDING["drawer_closed"]},
+            {"target": "switch_off", "instruction": LLM_PRIMITIVE_GROUNDING["switch_off"]},
+            {"target": "button_pressed", "instruction": LLM_PRIMITIVE_GROUNDING["button_pressed"]},
+            {"target": "door_right", "instruction": LLM_PRIMITIVE_GROUNDING["door_right"]},
+            {"target": "drawer_open", "instruction": LLM_PRIMITIVE_GROUNDING["drawer_open"]},
+        ],
+    },
+    "F_drawer_after_button_switch": {
+        "planner_input": "F drawer_closed AND (!drawer_closed U (button_pressed AND switch_off))",
+        "strategy": "Do the prerequisite button and switch commands before the drawer command.",
+        "dropped_clauses": [],
+        "commands": [
+            {"target": "button_pressed", "instruction": LLM_PRIMITIVE_GROUNDING["button_pressed"]},
+            {"target": "switch_off", "instruction": LLM_PRIMITIVE_GROUNDING["switch_off"]},
+            {"target": "drawer_closed", "instruction": LLM_PRIMITIVE_GROUNDING["drawer_closed"]},
+        ],
+    },
+    "F_drawer_G_constraint": {
+        "planner_input": "F drawer_closed AND G gripper_open",
+        "strategy": "Combine the liveness primitive with the global gripper-open constraint as a language instruction.",
+        "dropped_clauses": [],
+        "commands": [
+            {
+                "target": "drawer_closed",
+                "instruction": "push the handle to close the drawer while keeping the gripper open",
+            },
+        ],
+    },
+    "F_switch_G_safety": {
+        "planner_input": "F switch_off AND G avoid_unsafe_square",
+        "strategy": "Combine the liveness primitive with the global unsafe-region constraint as a language instruction.",
+        "dropped_clauses": [],
+        "commands": [
+            {
+                "target": "switch_off",
+                "instruction": "use the switch to turn off the light bulb while keeping the robot arm out of the unsafe square",
+            },
+        ],
+    },
+}
 
 
-def rollout_flower_once(
+def plan_for_spec(spec) -> Dict[str, Any]:
+    if spec.name not in LLM_TASK_PLANS:
+        raise KeyError(f"No LLM plan registered for task {spec.name}")
+    plan = json.loads(json.dumps(LLM_TASK_PLANS[spec.name]))
+    plan["task"] = spec.name
+    plan["formula"] = spec.formula
+    return plan
+
+
+def make_command_schedule(plan: Dict[str, Any], horizon: int, subtask_steps: Optional[int]) -> list[Dict[str, Any]]:
+    commands = list(plan["commands"])
+    if not commands:
+        raise ValueError(f"LLM plan for {plan['task']} contains no commands")
+    if subtask_steps is not None:
+        budgets = [int(subtask_steps)] * len(commands)
+    else:
+        base = int(horizon) // len(commands)
+        remainder = int(horizon) % len(commands)
+        budgets = [base + (1 if idx < remainder else 0) for idx in range(len(commands))]
+    if any(steps <= 0 for steps in budgets):
+        raise ValueError(f"Invalid command schedule for horizon={horizon}, budgets={budgets}")
+    schedule = []
+    start = 0
+    for idx, (command, steps) in enumerate(zip(commands, budgets)):
+        end = start + int(steps)
+        schedule.append(
+            {
+                "idx": int(idx),
+                "start_step": int(start),
+                "end_step_exclusive": int(end),
+                "budget": int(steps),
+                "target": command.get("target"),
+                "instruction": command["instruction"],
+            }
+        )
+        start = end
+    return schedule
+
+
+def command_for_step(schedule: Sequence[Dict[str, Any]], step: int) -> Dict[str, Any]:
+    for command in schedule:
+        if int(command["start_step"]) <= int(step) < int(command["end_step_exclusive"]):
+            return command
+    return schedule[-1]
+
+
+def rollout_llm_flower_once(
     *,
     seed: int,
     env_ckpt_dict: Dict[str, Any],
     flower_policy: FlowerPolicyAdapter,
     spec,
-    instruction: str,
+    llm_plan: Dict[str, Any],
+    command_schedule: Sequence[Dict[str, Any]],
     scene_config_path: Path,
     reset_poses: Sequence[np.ndarray],
     reset_pose_filter: Dict[str, Any],
@@ -264,7 +262,6 @@ def rollout_flower_once(
             settle_scene_states.append(np.asarray(settled_state["scene"], dtype=np.float32).copy())
             settle_robot_states.append(np.asarray(settled_state["robot"], dtype=np.float32).copy())
 
-        flower_policy.reset(instruction)
         monitor = SpecMonitor(spec)
         scene_snapshot = CRU.capture_scene_snapshot(env)
         frames = [CRU.render_visual_camera(env, video_cfg)] if save_video else []
@@ -282,7 +279,9 @@ def rollout_flower_once(
         eef_xy = [robot_states[-1][:2].copy()]
         first_behavior, first_behavior_step = "none", -1
         behavior_events = []
+        command_switches = []
         last_behavior = "other"
+        last_command_idx = None
         termination_reason = "horizon"
         env_done_step = -1
         total_reward = 0.0
@@ -290,6 +289,19 @@ def rollout_flower_once(
 
         for step in range(int(horizon)):
             last_step = step
+            command = command_for_step(command_schedule, step)
+            if last_command_idx != command["idx"]:
+                flower_policy.reset(command["instruction"])
+                command_switches.append(
+                    {
+                        "step": int(step),
+                        "command_idx": int(command["idx"]),
+                        "target": command.get("target"),
+                        "instruction": command["instruction"],
+                    }
+                )
+                last_command_idx = int(command["idx"])
+
             action = np.asarray(flower_policy(obs), dtype=np.float32).copy()
             next_obs, reward, done, _ = env.step(action.copy())
             total_reward += float(reward)
@@ -324,6 +336,9 @@ def rollout_flower_once(
                 {
                     "t": int(step + 1),
                     "mode": spec.mode,
+                    "command_idx": int(command["idx"]),
+                    "command_target": command.get("target"),
+                    "instruction": command["instruction"],
                     "current_label": label_now.astype(int).tolist(),
                     "advanced": bool(advanced),
                     "new_events": monitor.events[events_before:],
@@ -355,12 +370,17 @@ def rollout_flower_once(
         stl_satisfied = bool(liveness_satisfied and (safety_satisfied is not False) and not order_violation)
         behavior = "stl_satisfied" if stl_satisfied else "liveness_satisfied" if liveness_satisfied else first_behavior
         behavior_step = int(target_events[-1]["step"] if target_events else first_behavior_step)
+        instruction_sequence = [item["instruction"] for item in command_schedule]
 
         rollout = {
             "task": spec.name,
             "formula": spec.formula,
-            "policy": "flower_vla",
-            "instruction": instruction,
+            "policy": "llm_planned_flower_vla",
+            "instruction": " | ".join(instruction_sequence),
+            "instruction_sequence": instruction_sequence,
+            "llm_plan": llm_plan,
+            "command_schedule": list(command_schedule),
+            "command_switches": command_switches,
             "scene_config": scene_cfg["name"],
             "seed": int(seed),
             "behavior": behavior,
@@ -418,7 +438,7 @@ def rollout_flower_once(
         CRU.plot_rollout_xy(
             [rollout],
             rollout["scene_snapshot"],
-            f"FLOWER {spec.name} seed {seed} | stl={stl_satisfied} subgoals={completed_subgoals}/{total_subgoals}",
+            f"LLM+FLOWER {spec.name} seed {seed} | stl={stl_satisfied} subgoals={completed_subgoals}/{total_subgoals}",
             save_path=rollout_dir / "rollout_xy.png",
             display_inline=False,
         )
@@ -429,8 +449,11 @@ def rollout_flower_once(
                 "task": spec.name,
                 "formula": spec.formula,
                 "seed": int(seed),
-                "policy": "flower_vla",
-                "instruction": instruction,
+                "policy": "llm_planned_flower_vla",
+                "instruction_sequence": instruction_sequence,
+                "llm_plan": llm_plan,
+                "command_schedule": list(command_schedule),
+                "command_switches": command_switches,
                 "liveness_satisfied": bool(liveness_satisfied),
                 "safety_satisfied": rollout["safety_satisfied"],
                 "stl_satisfied": bool(stl_satisfied),
@@ -492,7 +515,13 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--n-rollouts", "--num-rollouts", type=int, default=10)
-    parser.add_argument("--horizon", type=int, default=None)
+    parser.add_argument("--horizon", type=int, default=None, help="Override total horizon per STL task.")
+    parser.add_argument(
+        "--subtask-steps",
+        type=int,
+        default=None,
+        help="Use a fixed budget for every LLM-generated command. By default the task horizon is split evenly.",
+    )
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--reset-pose-files", type=Path, nargs="*", default=list(DEFAULT_RESET_POSE_FILES))
@@ -570,14 +599,28 @@ def main() -> None:
             margin=SafetyBox().margin,
         )
     gripper_spec = GripperOpenSpec(min_width=float(args.gripper_min_width), margin=float(args.gripper_margin))
-    run_name = args.name or f"flower_complex_stls_rollouts{args.n_rollouts}_{time.strftime('%Y%m%d_%H%M%S')}"
+    run_name = args.name or f"llm_flower_complex_stls_rollouts{args.n_rollouts}_{time.strftime('%Y%m%d_%H%M%S')}"
     run_dir = Path(args.output_root).expanduser()
     if not run_dir.is_absolute():
         run_dir = REPO_ROOT / run_dir
     run_dir = unique_run_dir(run_dir, run_name)
 
+    plans = {}
+    for spec in specs:
+        task_horizon = int(args.horizon if args.horizon is not None else spec.default_horizon)
+        plan = plan_for_spec(spec)
+        plan["command_schedule"] = make_command_schedule(plan, task_horizon, args.subtask_steps)
+        plan["horizon"] = int(plan["command_schedule"][-1]["end_step_exclusive"])
+        plans[spec.name] = plan
+
     planned = {
-        "policy": "flower_vla",
+        "policy": "llm_planned_flower_vla",
+        "planner": "static_llm_decomposition_by_codex",
+        "fairness_note": (
+            "The LLM plan is fixed before rollout. Command switches are time-budgeted, "
+            "not triggered by proposition labels or oracle task success."
+        ),
+        "primitive_grounding": LLM_PRIMITIVE_GROUNDING,
         "flower_root": str(Path(args.flower_root).expanduser()),
         "flower_checkpoint": str(flower_checkpoint),
         "env_checkpoint": str(env_checkpoint),
@@ -588,7 +631,7 @@ def main() -> None:
         "run_name": run_dir.name,
         "scene_config_arg": str(scene_config_arg),
         "tasks": tasks,
-        "instructions": {spec.name: spec.prompt for spec in specs},
+        "llm_plans": plans,
         "task_specs": [
             {
                 "name": spec.name,
@@ -597,7 +640,8 @@ def main() -> None:
                 "target_names": list(spec.target_names),
                 "stage_target_names": [list(stage) for stage in spec.stage_target_names],
                 "safety_kind": spec.safety_kind,
-                "horizon": int(args.horizon if args.horizon is not None else spec.default_horizon),
+                "horizon": int(plans[spec.name]["horizon"]),
+                "command_count": len(plans[spec.name]["commands"]),
             }
             for spec in specs
         ],
@@ -610,6 +654,7 @@ def main() -> None:
         "settle_gripper": float(args.settle_gripper),
         "safety_box": asdict(safety_box.normalized()),
         "gripper_spec": asdict(gripper_spec.normalized()),
+        "subtask_steps": None if args.subtask_steps is None else int(args.subtask_steps),
         "save_video": not args.no_video,
         "stop_when_complete": not args.dont_stop_when_complete,
         "stop_on_env_done": bool(args.stop_on_env_done),
@@ -626,6 +671,7 @@ def main() -> None:
 
     run_dir.mkdir(parents=True, exist_ok=False)
     write_json(run_dir / "run_args.json", planned)
+    write_json(run_dir / "llm_plans.json", plans)
     print("device:", device)
     print("flower checkpoint:", flower_checkpoint)
     print("env checkpoint:", env_checkpoint)
@@ -633,7 +679,9 @@ def main() -> None:
 
     all_task_summaries = []
     for spec in specs:
-        task_horizon = int(args.horizon if args.horizon is not None else spec.default_horizon)
+        plan = plans[spec.name]
+        task_horizon = int(plan["horizon"])
+        command_schedule = plan["command_schedule"]
         task_dir = run_dir / spec.name
         task_dir.mkdir(parents=True, exist_ok=True)
         write_json(
@@ -646,22 +694,29 @@ def main() -> None:
                 "stage_target_names": [list(stage) for stage in spec.stage_target_names],
                 "safety_kind": spec.safety_kind,
                 "horizon": task_horizon,
-                "instruction": spec.prompt,
+                "llm_plan": plan,
             },
         )
         write_json(task_dir / "scene_config_resolved.json", load_json(scene_config_path))
 
-        print(f"\nTask {spec.name}: instruction={spec.prompt!r}")
+        print(f"\nTask {spec.name}:")
+        for command in command_schedule:
+            print(
+                f"  command {command['idx']}: steps {command['start_step']}..{command['end_step_exclusive'] - 1} "
+                f"target={command.get('target')} instruction={command['instruction']!r}"
+            )
+
         rollouts = []
         for rollout_idx in range(int(args.n_rollouts)):
             seed = int(args.seed_start) + rollout_idx
             tag = f"rollout_{rollout_idx:03d}_seed_{seed:03d}"
-            rollout = rollout_flower_once(
+            rollout = rollout_llm_flower_once(
                 seed=seed,
                 env_ckpt_dict=env_ckpt_dict,
                 flower_policy=flower_policy,
                 spec=spec,
-                instruction=spec.prompt,
+                llm_plan=plan,
+                command_schedule=command_schedule,
                 scene_config_path=scene_config_path,
                 reset_poses=reset_poses or [],
                 reset_pose_filter=reset_pose_filter,
@@ -689,13 +744,15 @@ def main() -> None:
             )
 
         summary = task_summary(spec, rollouts, n_candidates=0, horizon=task_horizon)
-        summary["instruction"] = spec.prompt
+        summary["llm_plan"] = plan
+        summary["instruction_sequence"] = [command["instruction"] for command in command_schedule]
+        summary["command_count"] = len(command_schedule)
         write_json(task_dir / "task_summary.json", summary)
         if rollouts:
             CRU.plot_rollout_xy(
                 rollouts,
                 rollouts[0]["scene_snapshot"],
-                f"FLOWER {spec.name} | STL {summary['stl_satisfied_count']}/{summary['n_rollouts']} | {spec.formula}",
+                f"LLM+FLOWER {spec.name} | STL {summary['stl_satisfied_count']}/{summary['n_rollouts']} | {spec.formula}",
                 save_path=task_dir / "task_rollouts_xy.png",
                 display_inline=False,
             )
