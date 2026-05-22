@@ -1,0 +1,28 @@
+{
+  "name": "complex_liveness_initial",
+  "description": "Initial state for selection/unordered liveness tests: sliding door right, switch/lightbulb on, button off, drawer open, with movable blocks hidden on the right side of the slider closet.",
+  "env_setup": {
+    "sliding_door": 0.0,
+    "drawer": 0.16,
+    "button": 0.0,
+    "switch": 0.085,
+    "lightbulb": 1.0,
+    "green_light": 0.0
+  },
+  "blocks": {
+    "poses": {
+      "block_red": {
+        "position": [0.04, 0.0924044687, 0.460990009],
+        "rotation": [0.0, 0.0, 0]
+      },
+      "block_blue": {
+        "position": [0.08, 0.0924044687, 0.460990009],
+        "rotation": [0.0, 0.0, 0]
+      },
+      "block_pink": {
+        "position": [0.06, 0.0924044687, 0.502],
+        "rotation": [0.0, 0.0, 0]
+      }
+    }
+  }
+}

@@ -15,14 +15,11 @@ articulated-object experiments, but evaluates richer STL-style objectives:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
-import random
 import sys
 import time
-from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
@@ -49,6 +46,41 @@ import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.torch_utils as TorchUtils
 
 from calvin_experiments import calvin_rollout_utils as CRU
+from calvin_experiments.complex_stl_experiment_utils import (
+    COMPLEX_STL_SPECS,
+    DEFAULT_COMPLEX_RESET_ROBOT_X_MAX,
+    DEFAULT_COMPLEX_RESET_ROBOT_X_MIN,
+    DEFAULT_COMPLEX_RESET_ROBOT_Y_MAX,
+    DEFAULT_COMPLEX_RESET_ROBOT_Y_MIN,
+    DEFAULT_RESET_POSE_FILES,
+    DEFAULT_SCENE_CONFIG,
+    GRIPPER_WIDTH_RAW_ROBOT_IDX,
+    TASK_ORDER,
+    VIDEO_FPS,
+    ComplexSTLSpec,
+    GripperOpenSpec,
+    RzzSpec,
+    SafetyBox,
+    evaluate_safety,
+    evaluate_subgoals,
+    filter_complex_reset_poses,
+    load_reset_pose_pool,
+    make_angle_stl_spec,
+    make_fixed_scene_robot,
+    randomized_safety_context_for_rollout,
+    resolve_reset_pose_paths,
+    rollout_summary_payload,
+    rzz_from_euler_xyz_np,
+    rzz_to_tilt_angle_deg_np,
+    save_rollout_diagnostics,
+    save_trace_without_video,
+    safety_randomization_plan,
+    task_summary,
+    unique_run_dir,
+    write_rollout_rzz_angle_diagnostic_plot,
+    write_rzz_angle_diagnostic_plot,
+    write_summary_tables,
+)
 from calvin_experiments.label_calvin_world_model import label_scene_states_for_names
 from calvin_experiments.run_dynaguide_articulated_automaton import (
     DEFAULT_RESET_SWITCH_CLEARANCE,
@@ -56,7 +88,6 @@ from calvin_experiments.run_dynaguide_articulated_automaton import (
     DEFAULT_SETTLE_STEPS,
     DEFAULT_VISUALIZATION_CONFIG,
     AutomatonGuidance,
-    filter_reset_poses,
     format_onehot,
     idle_action_from_checkpoint,
     load_json,
@@ -70,7 +101,6 @@ from calvin_experiments.run_dynaguide_articulated_automaton import (
 from calvin_experiments.train_dynamics_world_model import load_dynamics_model_for_eval
 
 
-DEFAULT_SCENE_CONFIG = Path("calvin_experiments/configs/robust_direction_initial.json")
 DEFAULT_OUTPUT_ROOT = Path("outputs/calvin_paper/complex-behaviors")
 DEFAULT_COMPLEX_POLICY_CKPT = Path("outputs/calvin/base_policy/calvin_D_base_dp/20260501015147/models/model_epoch_280.pth")
 DEFAULT_COMPLEX_AUTOMATON_CKPT = Path(
@@ -79,227 +109,6 @@ DEFAULT_COMPLEX_AUTOMATON_CKPT = Path(
 DEFAULT_DYNAMICS_CKPT = Path(
     "outputs/calvin/dynamics_world_model/hd512_depth4_drop0.02_lr0.0005_epochs70_2026-05-06_01-42-08"
 )
-DEFAULT_RESET_POSE_DIR = Path("calvin_experiments/configs/dynaguide_articulated_objects/reset_poses")
-DEFAULT_RESET_POSE_FILES = (
-    DEFAULT_RESET_POSE_DIR / "initial_calvin_robot_states_constrained.json",
-    DEFAULT_RESET_POSE_DIR / "initial_calvin_robot_states_midpoint.json",
-    DEFAULT_RESET_POSE_DIR / "initial_calvin_robot_states_right_side_midpoint.json",
-)
-DEFAULT_COMPLEX_RESET_ROBOT_X_MIN = 0.0
-DEFAULT_COMPLEX_RESET_ROBOT_X_MAX = 0.2
-DEFAULT_COMPLEX_RESET_ROBOT_Y_MIN = -0.25
-DEFAULT_COMPLEX_RESET_ROBOT_Y_MAX = -0.15
-VIDEO_FPS = 30
-GRIPPER_WIDTH_RAW_ROBOT_IDX = 6
-
-
-@dataclass(frozen=True)
-class SafetyBox:
-    x_min: float = 0.225
-    x_max: float = 0.275
-    y_min: float = -0.125
-    y_max: float = -0.075
-    margin: float = 0.02
-
-    def normalized(self) -> "SafetyBox":
-        return SafetyBox(
-            min(self.x_min, self.x_max),
-            max(self.x_min, self.x_max),
-            min(self.y_min, self.y_max),
-            max(self.y_min, self.y_max),
-            float(max(self.margin, 0.0)),
-        )
-
-
-@dataclass(frozen=True)
-class GripperOpenSpec:
-    min_width: float = 0.06
-    margin: float = 0.02
-
-    def normalized(self) -> "GripperOpenSpec":
-        return GripperOpenSpec(float(self.min_width), float(max(self.margin, 0.0)))
-
-
-@dataclass(frozen=True)
-class ComplexSTLSpec:
-    name: str
-    mode: str
-    formula: str
-    target_names: tuple[str, ...] = ()
-    stage_target_names: tuple[tuple[str, ...], ...] = ()
-    safety_kind: Optional[str] = None
-    default_horizon: int = 400
-    default_n_candidates: int = 16
-    prompt: str = ""
-
-    @property
-    def flattened_targets(self) -> tuple[str, ...]:
-        if self.stage_target_names:
-            return tuple(name for stage in self.stage_target_names for name in stage)
-        return tuple(self.target_names)
-
-    @property
-    def required_subgoal_count(self) -> int:
-        if self.mode == "or":
-            return 1
-        return len(self.flattened_targets)
-
-
-COMPLEX_STL_SPECS: Dict[str, ComplexSTLSpec] = {
-    "F_a_or_F_b": ComplexSTLSpec(
-        name="F_a_or_F_b",
-        mode="or",
-        formula="F button_pressed OR F switch_off",
-        target_names=("button_pressed", "switch_off"),
-        default_horizon=250,
-        default_n_candidates=16,
-        prompt="press the button or turn off the lightbulb with the switch",
-    ),
-    "F_a_and_F_b": ComplexSTLSpec(
-        name="F_a_and_F_b",
-        mode="and",
-        formula="F button_pressed AND F switch_off",
-        target_names=("button_pressed", "switch_off"),
-        default_horizon=350,
-        default_n_candidates=16,
-        prompt="press the button and turn off the lightbulb with the switch",
-    ),
-    "F_button_then_F_drawer": ComplexSTLSpec(
-        name="F_button_then_F_drawer",
-        mode="chain",
-        formula="F(drawer_closed -> F switch_off -> F button_pressed -> F door_right -> F drawer_open)",
-        target_names=("drawer_closed", "switch_off", "button_pressed", "door_right", "drawer_open"),
-        default_horizon=700,
-        default_n_candidates=16,
-        prompt="close the drawer, then turn off the lightbulb with the switch, then press the button, then move the sliding door right, and finally open the drawer",
-    ),
-    "F_drawer_after_button_switch": ComplexSTLSpec(
-        name="F_drawer_after_button_switch",
-        mode="ordered_stage",
-        formula="F drawer_closed AND (!drawer_closed U (button_pressed AND switch_off))",
-        stage_target_names=(("button_pressed", "switch_off"), ("drawer_closed",)),
-        default_horizon=450,
-        default_n_candidates=16,
-        prompt="press the button and turn off the lightbulb with the switch before closing the drawer",
-    ),
-    "F_drawer_G_constraint": ComplexSTLSpec(
-        name="F_drawer_G_constraint",
-        mode="target",
-        formula="F drawer_closed AND G gripper_open",
-        target_names=("drawer_closed",),
-        safety_kind="gripper_open",
-        default_horizon=250,
-        default_n_candidates=16,
-        prompt="close the drawer while keeping the gripper open",
-    ),
-    "F_switch_G_safety": ComplexSTLSpec(
-        name="F_switch_G_safety",
-        mode="target",
-        formula="F switch_off AND G avoid_unsafe_square",
-        target_names=("switch_off",),
-        safety_kind="eef_avoid_box",
-        default_horizon=220,
-        default_n_candidates=16,
-        prompt="turn off the lightbulb with the switch while keeping the robot arm out of the unsafe square",
-    ),
-}
-TASK_ORDER = tuple(COMPLEX_STL_SPECS)
-
-
-def unique_run_dir(output_root: Path, run_name: str) -> Path:
-    candidate = output_root / run_name
-    if not candidate.exists():
-        return candidate
-    suffix = 1
-    while True:
-        suffixed = output_root / f"{run_name}_{suffix:02d}"
-        if not suffixed.exists():
-            return suffixed
-        suffix += 1
-
-
-def resolve_reset_pose_paths(raw_paths: Sequence[Path | str]) -> list[Path]:
-    return [
-        resolve_existing_path(path, base_dir=repo_path(DEFAULT_RESET_POSE_DIR))
-        for path in raw_paths
-    ]
-
-
-def load_reset_pose_pool(paths: Sequence[Path]) -> tuple[list[np.ndarray], Dict[str, Any]]:
-    poses: list[np.ndarray] = []
-    sources = []
-    for path in paths:
-        payload = load_json(path)
-        states = [np.asarray(item, dtype=np.float32) for item in payload["robot_states"]]
-        poses.extend(states)
-        sources.append({"path": str(path), "count": len(states)})
-    return poses, {"sources": sources, "total_count": len(poses)}
-
-
-def filter_complex_reset_poses(
-    poses: Sequence[np.ndarray],
-    *,
-    robot_x_min: Optional[float],
-    robot_x_max: Optional[float],
-    robot_y_min: Optional[float],
-    robot_y_max: Optional[float],
-    switch_clearance: Optional[float],
-) -> tuple[list[np.ndarray], Dict[str, Any]]:
-    base_filtered, filter_meta = filter_reset_poses(
-        list(poses),
-        robot_y_min=robot_y_min,
-        robot_y_max=robot_y_max,
-        switch_clearance=switch_clearance,
-    )
-    filtered = list(base_filtered or [])
-    if robot_x_min is not None:
-        filtered = [pose for pose in filtered if float(pose[0]) >= float(robot_x_min)]
-    after_robot_x_min = len(filtered)
-    if robot_x_max is not None:
-        filtered = [pose for pose in filtered if float(pose[0]) <= float(robot_x_max)]
-    after_robot_x_max = len(filtered)
-    if not filtered:
-        raise ValueError(
-            "Complex-STL reset-pose XY frame removed every pose "
-            f"(x_min={robot_x_min}, x_max={robot_x_max}, y_min={robot_y_min}, y_max={robot_y_max}, "
-            f"switch_clearance={switch_clearance})"
-        )
-    frame_enabled = any(
-        value is not None
-        for value in (robot_x_min, robot_x_max, robot_y_min, robot_y_max, switch_clearance)
-    )
-    return filtered, {
-        **filter_meta,
-        "enabled": bool(frame_enabled),
-        "after_robot_x_min": int(after_robot_x_min),
-        "after_robot_x_max": int(after_robot_x_max),
-        "filtered_count": int(len(filtered)),
-        "robot_x_min": None if robot_x_min is None else float(robot_x_min),
-        "robot_x_max": None if robot_x_max is None else float(robot_x_max),
-        "xy_frame": {
-            "x_min": None if robot_x_min is None else float(robot_x_min),
-            "x_max": None if robot_x_max is None else float(robot_x_max),
-            "y_min": None if robot_y_min is None else float(robot_y_min),
-            "y_max": None if robot_y_max is None else float(robot_y_max),
-        },
-    }
-
-
-def make_fixed_scene_robot(
-    base_env_state: Dict[str, np.ndarray],
-    scene_config_path: Path,
-    reset_poses: Sequence[np.ndarray],
-    fixed_reset_pose_index: Optional[int],
-) -> tuple[np.ndarray, np.ndarray, Dict[str, Any], bool]:
-    fixed_scene, fixed_robot, scene_cfg = CRU.fixed_scene_robot_from_config(base_env_state, scene_config_path)
-    if reset_poses:
-        if fixed_reset_pose_index is None:
-            selected_pose = random.choice(list(reset_poses))
-        else:
-            selected_pose = list(reset_poses)[int(fixed_reset_pose_index) % len(reset_poses)]
-        fixed_robot = np.asarray(selected_pose, dtype=np.float32).copy()
-        return fixed_scene, fixed_robot, scene_cfg, True
-    return fixed_scene, fixed_robot, scene_cfg, False
 
 
 def euler_xyz_to_rot6d_torch(euler_xyz: torch.Tensor) -> torch.Tensor:
@@ -338,19 +147,161 @@ def project_dynamics_state_torch(state: torch.Tensor) -> torch.Tensor:
     return torch.cat(pieces + [state[..., cursor:]], dim=-1)
 
 
-def signed_distance_to_box_np(xy: np.ndarray, safety_box: SafetyBox) -> np.ndarray:
-    box = safety_box.normalized()
-    xy = np.asarray(xy, dtype=np.float32)
-    center = np.asarray([(box.x_min + box.x_max) / 2, (box.y_min + box.y_max) / 2], dtype=np.float32)
-    half = np.asarray([(box.x_max - box.x_min) / 2, (box.y_max - box.y_min) / 2], dtype=np.float32)
-    q = np.abs(xy - center) - half
-    outside = np.linalg.norm(np.maximum(q, 0.0), axis=-1)
-    inside = np.minimum(np.maximum(q[..., 0], q[..., 1]), 0.0)
-    return outside + inside
+def rot6d_to_rzz_torch(rot6d: torch.Tensor) -> torch.Tensor:
+    rot6d = project_rot6d_torch(rot6d)
+    r1 = rot6d[..., 0:3]
+    r2 = rot6d[..., 3:6]
+    r3 = torch.cross(r1, r2, dim=-1)
+    return r3[..., 2]
 
 
-def path_enters_safety_box(eef_xy: np.ndarray, safety_box: SafetyBox) -> bool:
-    return bool(np.any(signed_distance_to_box_np(eef_xy, safety_box) <= 0.0))
+def euler_xyz_to_matrix_np(euler_xyz: Sequence[float]) -> np.ndarray:
+    roll, pitch, yaw = [float(v) for v in np.asarray(euler_xyz, dtype=np.float32)]
+    sx, cx = np.sin(roll), np.cos(roll)
+    sy, cy = np.sin(pitch), np.cos(pitch)
+    sz, cz = np.sin(yaw), np.cos(yaw)
+    return np.asarray(
+        [
+            [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+            [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+            [-sy, cy * sx, cy * cx],
+        ],
+        dtype=np.float32,
+    )
+
+
+def matrix_to_euler_xyz_np(rot: np.ndarray) -> np.ndarray:
+    rot = np.asarray(rot, dtype=np.float64)
+    pitch = np.arcsin(np.clip(-rot[2, 0], -1.0, 1.0))
+    cp = np.cos(pitch)
+    if abs(cp) < 1e-6:
+        roll = 0.0
+        yaw = np.arctan2(-rot[0, 1], rot[1, 1])
+    else:
+        roll = np.arctan2(rot[2, 1], rot[2, 2])
+        yaw = np.arctan2(rot[1, 0], rot[0, 0])
+    return np.asarray([roll, pitch, yaw], dtype=np.float32)
+
+
+def target_tcp_z_axis_np(current_euler_xyz: Sequence[float], rzz_spec: RzzSpec) -> np.ndarray:
+    target_z = float(rzz_spec.target)
+    horizontal = float(np.sqrt(max(0.0, 1.0 - target_z ** 2)))
+    if horizontal < 1e-8:
+        return np.asarray([0.0, 0.0, np.sign(target_z) if target_z != 0 else 1.0], dtype=np.float32)
+    current_rot = euler_xyz_to_matrix_np(current_euler_xyz)
+    direction = np.asarray(current_rot[:2, 2], dtype=np.float32)
+    norm = float(np.linalg.norm(direction))
+    if norm < 1e-8:
+        direction = np.asarray(current_rot[:2, 0], dtype=np.float32)
+        norm = float(np.linalg.norm(direction))
+    if norm < 1e-8:
+        direction = np.asarray([1.0, 0.0], dtype=np.float32)
+    else:
+        direction = direction / norm
+    return np.asarray([horizontal * direction[0], horizontal * direction[1], target_z], dtype=np.float32)
+
+
+def euler_with_target_tcp_z_axis(current_euler_xyz: Sequence[float], target_z_axis: Sequence[float]) -> np.ndarray:
+    r3 = np.asarray(target_z_axis, dtype=np.float32)
+    r3 = r3 / (np.linalg.norm(r3) + 1e-8)
+    current_rot = euler_xyz_to_matrix_np(current_euler_xyz)
+    r1 = current_rot[:, 0]
+    r1 = r1 - np.dot(r1, r3) * r3
+    if np.linalg.norm(r1) < 1e-6:
+        fallback = np.asarray([1.0, 0.0, 0.0], dtype=np.float32)
+        if abs(np.dot(fallback, r3)) > 0.95:
+            fallback = np.asarray([0.0, 1.0, 0.0], dtype=np.float32)
+        r1 = fallback - np.dot(fallback, r3) * r3
+    r1 = r1 / (np.linalg.norm(r1) + 1e-8)
+    r2 = np.cross(r3, r1)
+    r2 = r2 / (np.linalg.norm(r2) + 1e-8)
+    rot = np.stack([r1, r2, r3], axis=1)
+    return matrix_to_euler_xyz_np(rot)
+
+
+def angle_diff(a: float, b: float) -> float:
+    return float(np.arctan2(np.sin(a - b), np.cos(a - b)))
+
+
+def restack_current_observation(env):
+    if not hasattr(env, "_get_initial_obs_history"):
+        return None
+    robomimic_env = env.env
+    raw_obs = getattr(robomimic_env, "_current_obs", None)
+    obs = robomimic_env.get_observation(raw_obs)
+    env.timestep = 0
+    env.update_obs(obs, reset=True)
+    env.obs_history = env._get_initial_obs_history(init_obs=obs)
+    return env._get_stacked_obs_from_history()
+
+
+def apply_rzz_action_warmup(
+    env,
+    obs,
+    rzz_spec: RzzSpec,
+    *,
+    max_steps: int,
+    tolerance: Optional[float],
+    save_video: bool,
+    video_cfg: Dict[str, Any],
+    restack_obs: bool,
+) -> tuple[Any, Dict[str, Any], list[np.ndarray]]:
+    tolerance = float(min(0.005, max(1e-4, 0.1 * float(rzz_spec.tolerance))) if tolerance is None else tolerance)
+    start_robot = np.asarray(env.get_state()["robot"], dtype=np.float32).copy()
+    target_axis = target_tcp_z_axis_np(start_robot[3:6], rzz_spec)
+    target_euler = euler_with_target_tcp_z_axis(start_robot[3:6], target_axis)
+    max_rel_orn = float(getattr(CRU.get_calvin_unwrapped_env(env).robot, "max_rel_orn", 0.05))
+    warmup_actions, warmup_states, frames = [], [start_robot.copy()], []
+    reached = abs(float(rzz_from_euler_xyz_np(start_robot[3:6])) - float(rzz_spec.target)) <= tolerance
+    done = False
+    for _ in range(int(max_steps)):
+        if reached or done:
+            break
+        robot = np.asarray(env.get_state()["robot"], dtype=np.float32).copy()
+        delta_euler = np.asarray(
+            [angle_diff(float(target_euler[i]), float(robot[3 + i])) for i in range(3)],
+            dtype=np.float32,
+        )
+        action = np.zeros(7, dtype=np.float32)
+        action[3:6] = np.clip(delta_euler / max(max_rel_orn, 1e-6), -1.0, 1.0)
+        action[6] = 1.0
+        warmup_actions.append(action.copy())
+        obs, _, done, _ = env.step(action.copy())
+        new_robot = np.asarray(env.get_state()["robot"], dtype=np.float32).copy()
+        warmup_states.append(new_robot.copy())
+        if save_video:
+            frames.append(CRU.render_visual_camera(env, video_cfg))
+        reached = abs(float(rzz_from_euler_xyz_np(new_robot[3:6])) - float(rzz_spec.target)) <= tolerance
+    if restack_obs:
+        restacked = restack_current_observation(env)
+        if restacked is not None:
+            obs = restacked
+    final_robot = np.asarray(env.get_state()["robot"], dtype=np.float32).copy()
+    info = {
+        "enabled": True,
+        "mode": "warmup",
+        "target_rzz": float(rzz_spec.target),
+        "tolerance": tolerance,
+        "target_tcp_z_axis": [float(v) for v in target_axis],
+        "target_euler_xyz": [float(v) for v in target_euler],
+        "start_xyz": start_robot[:3].astype(float).tolist(),
+        "start_rzz": float(rzz_from_euler_xyz_np(start_robot[3:6])),
+        "start_angle_deg": float(rzz_to_tilt_angle_deg_np(rzz_from_euler_xyz_np(start_robot[3:6]), rzz_spec)),
+        "final_xyz": final_robot[:3].astype(float).tolist(),
+        "final_rzz": float(rzz_from_euler_xyz_np(final_robot[3:6])),
+        "final_angle_deg": float(rzz_to_tilt_angle_deg_np(rzz_from_euler_xyz_np(final_robot[3:6]), rzz_spec)),
+        "final_angle_error_deg": float(abs(rzz_to_tilt_angle_deg_np(rzz_from_euler_xyz_np(final_robot[3:6]), rzz_spec) - float(rzz_spec.angle_deg))),
+        "xyz_drift": (final_robot[:3] - start_robot[:3]).astype(float).tolist(),
+        "n_steps": len(warmup_actions),
+        "reached_tolerance": bool(reached),
+        "restacked_obs": bool(restack_obs),
+        "actions": np.asarray(warmup_actions, dtype=np.float32).tolist(),
+        "robot_states": np.asarray(warmup_states, dtype=np.float32).tolist(),
+        "rzz_trace": [float(rzz_from_euler_xyz_np(state[3:6])) for state in warmup_states],
+        "angle_deg_trace": [float(rzz_to_tilt_angle_deg_np(rzz_from_euler_xyz_np(state[3:6]), rzz_spec)) for state in warmup_states],
+        "xyz_trace": [state[:3].astype(float).tolist() for state in warmup_states],
+    }
+    return obs, info, frames
 
 
 class DynamicsRefiner:
@@ -386,6 +337,134 @@ class DynamicsRefiner:
             states.append(state)
         return torch.stack(states, dim=1)
 
+    def rzz_robustness(
+        self,
+        state_dyn: torch.Tensor,
+        action_chunk: torch.Tensor,
+        rzz_spec: RzzSpec,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        pred_states = self.rollout_torch(state_dyn, action_chunk)
+        pred_rzz = rot6d_to_rzz_torch(pred_states[..., 3:9])
+        target = torch.as_tensor(rzz_spec.target, device=pred_rzz.device, dtype=pred_rzz.dtype)
+        abs_error = torch.abs(pred_rzz - target)
+        if rzz_spec.tolerance_deg is not None:
+            signed_cos = float(rzz_spec.axis_sign) * pred_rzz
+            pred_angle = torch.acos(torch.clamp(signed_cos, -1.0 + 1e-6, 1.0 - 1e-6)) * (180.0 / np.pi)
+            angle_error = torch.abs(pred_angle - float(rzz_spec.angle_deg))
+            margins = float(rzz_spec.tolerance_deg) - angle_error
+        else:
+            margins = float(rzz_spec.tolerance) - abs_error
+        # Keep the optimizer in Rzz space even when safety is reported in degrees.
+        # Otherwise --angle-tolerance-deg silently rescales guidance relative to the notebook.
+        mean_sq_error = torch.mean((pred_rzz - target) ** 2, dim=-1)
+        tau = max(float(rzz_spec.smooth_min_tau), 1e-6)
+        smooth_min_margin = -tau * torch.logsumexp(-margins / tau, dim=-1)
+        return smooth_min_margin, pred_rzz, abs_error, mean_sq_error
+
+    def refine_for_rzz(
+        self,
+        robot: Sequence[float],
+        scene: Sequence[float],
+        action_chunk: np.ndarray,
+        rzz_spec: RzzSpec,
+        guidance_scale: float,
+        gradient_steps: int,
+        step_size: float,
+        action_reg: float,
+        action_dims: Optional[Sequence[int]] = None,
+    ) -> tuple[np.ndarray, Dict[str, Any]]:
+        state_dyn = self.raw_env_state_to_dynamics_state_torch(robot, scene)
+        original = torch.as_tensor(action_chunk[None], device=self.device, dtype=torch.float32)
+        actions = original.clone().detach().requires_grad_(True)
+        opt = torch.optim.Adam([actions], lr=float(step_size))
+        action_dims = None if action_dims is None else tuple(int(dim) for dim in action_dims)
+        history = []
+        with torch.no_grad():
+            robust_before, pred_rzz_before, abs_error_before, mse_before = self.rzz_robustness(
+                state_dyn, original, rzz_spec
+            )
+        if float(guidance_scale) <= 0.0 or int(gradient_steps) <= 0:
+            pred_angle = rzz_to_tilt_angle_deg_np(pred_rzz_before[0].detach().cpu().numpy(), rzz_spec)
+            record = {
+                "enabled": False,
+                "target_rzz": float(rzz_spec.target),
+                "target_angle_deg": float(rzz_spec.angle_deg),
+                "tolerance": float(rzz_spec.tolerance),
+                "tolerance_deg": None if rzz_spec.tolerance_deg is None else float(rzz_spec.tolerance_deg),
+                "robust_before": float(robust_before[0].cpu()),
+                "robust_after": float(robust_before[0].cpu()),
+                "mse_before": float(mse_before[0].cpu()),
+                "mse_after": float(mse_before[0].cpu()),
+                "mean_abs_rzz_error_before": float(abs_error_before[0].mean().cpu()),
+                "mean_abs_rzz_error_after": float(abs_error_before[0].mean().cpu()),
+                "pred_rzz_before": pred_rzz_before[0].detach().cpu().numpy().tolist(),
+                "pred_rzz_after": pred_rzz_before[0].detach().cpu().numpy().tolist(),
+                "pred_angle_deg_before": np.asarray(pred_angle, dtype=np.float32).tolist(),
+                "pred_angle_deg_after": np.asarray(pred_angle, dtype=np.float32).tolist(),
+                "action_l2_change": 0.0,
+                "guided_action_dims": None if action_dims is None else list(action_dims),
+                "history": [],
+            }
+            return np.asarray(action_chunk, dtype=np.float32), record
+
+        for _ in range(int(gradient_steps)):
+            opt.zero_grad(set_to_none=True)
+            robust, _, _, mse = self.rzz_robustness(state_dyn, actions, rzz_spec)
+            action_penalty = torch.mean((actions - original) ** 2, dim=(1, 2))
+            objective = -float(guidance_scale) * mse - float(action_reg) * action_penalty
+            (-objective.mean()).backward()
+            opt.step()
+            with torch.no_grad():
+                if action_dims is not None:
+                    keep = original.clone()
+                    keep[..., list(action_dims)] = actions[..., list(action_dims)]
+                    actions.copy_(keep)
+                actions.clamp_(-1.0, 1.0)
+                history.append(
+                    {
+                        "robustness": float(robust[0].detach().cpu()),
+                        "mse": float(mse[0].detach().cpu()),
+                        "objective": float(objective[0].detach().cpu()),
+                    }
+                )
+        with torch.no_grad():
+            robust_after, pred_rzz_after, abs_error_after, mse_after = self.rzz_robustness(
+                state_dyn, actions, rzz_spec
+            )
+            non_guided_l2 = 0.0
+            if action_dims is not None:
+                mask = torch.ones(actions.shape[-1], device=self.device, dtype=torch.bool)
+                mask[list(action_dims)] = False
+                non_guided_l2 = float(torch.linalg.norm((actions - original)[..., mask]).detach().cpu())
+        pred_angle_before = rzz_to_tilt_angle_deg_np(pred_rzz_before[0].detach().cpu().numpy(), rzz_spec)
+        pred_angle_after = rzz_to_tilt_angle_deg_np(pred_rzz_after[0].detach().cpu().numpy(), rzz_spec)
+        angle_error_before = np.abs(pred_angle_before - float(rzz_spec.angle_deg))
+        angle_error_after = np.abs(pred_angle_after - float(rzz_spec.angle_deg))
+        record = {
+            "enabled": True,
+            "target_rzz": float(rzz_spec.target),
+            "target_angle_deg": float(rzz_spec.angle_deg),
+            "tolerance": float(rzz_spec.tolerance),
+            "tolerance_deg": None if rzz_spec.tolerance_deg is None else float(rzz_spec.tolerance_deg),
+            "robust_before": float(robust_before[0].cpu()),
+            "robust_after": float(robust_after[0].cpu()),
+            "mse_before": float(mse_before[0].cpu()),
+            "mse_after": float(mse_after[0].cpu()),
+            "mean_abs_rzz_error_before": float(abs_error_before[0].mean().cpu()),
+            "mean_abs_rzz_error_after": float(abs_error_after[0].mean().cpu()),
+            "mean_abs_angle_error_deg_before": float(np.mean(angle_error_before)),
+            "mean_abs_angle_error_deg_after": float(np.mean(angle_error_after)),
+            "pred_rzz_before": pred_rzz_before[0].detach().cpu().numpy().tolist(),
+            "pred_rzz_after": pred_rzz_after[0].detach().cpu().numpy().tolist(),
+            "pred_angle_deg_before": np.asarray(pred_angle_before, dtype=np.float32).tolist(),
+            "pred_angle_deg_after": np.asarray(pred_angle_after, dtype=np.float32).tolist(),
+            "action_l2_change": float(torch.linalg.norm(actions - original).detach().cpu()),
+            "non_guided_action_l2_change": non_guided_l2,
+            "guided_action_dims": None if action_dims is None else list(action_dims),
+            "history": history,
+        }
+        return actions[0].detach().cpu().numpy().astype(np.float32), record
+
     def gripper_open_robustness(
         self,
         state_dyn: torch.Tensor,
@@ -402,6 +481,15 @@ class DynamicsRefiner:
         smooth_min = -tau * torch.logsumexp(-capped / tau, dim=-1)
         return smooth_min, gripper_width
 
+    def raw_gripper_width_objective(
+        self,
+        state_dyn: torch.Tensor,
+        action_chunk: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        pred_states = self.rollout_torch(state_dyn, action_chunk)
+        gripper_width = pred_states[..., 9]
+        return gripper_width.mean(dim=-1), gripper_width
+
     def refine_for_gripper_open(
         self,
         robot: Sequence[float],
@@ -413,6 +501,7 @@ class DynamicsRefiner:
         step_size: float,
         action_reg: float,
         smooth_min_tau: float,
+        mode: str = "smooth_min_all_actions",
     ) -> tuple[np.ndarray, Dict[str, Any]]:
         state_dyn = self.raw_env_state_to_dynamics_state_torch(robot, scene)
         original = torch.as_tensor(action_chunk[None], device=self.device, dtype=torch.float32)
@@ -421,6 +510,7 @@ class DynamicsRefiner:
         if float(guidance_scale) <= 0.0 or int(gradient_steps) <= 0:
             record = {
                 "enabled": False,
+                "mode": mode,
                 "robust_before": float(robust_before[0].cpu()),
                 "robust_after": float(robust_before[0].cpu()),
                 "min_width_before": float(width_before[0].min().cpu()),
@@ -428,21 +518,43 @@ class DynamicsRefiner:
                 "pred_width_before": width_before[0].detach().cpu().numpy().tolist(),
                 "pred_width_after": width_before[0].detach().cpu().numpy().tolist(),
                 "action_l2_change": 0.0,
+                "non_gripper_l2_change": 0.0,
+                "gripper_l2_change": 0.0,
                 "history": [],
             }
             return np.asarray(action_chunk, dtype=np.float32), record
 
+        if mode not in {
+            "smooth_min_all_actions",
+            "world_model_all_actions",
+            "world_model_gripper_only",
+            "world_model_gripper_value_only",
+            "world_model_gripper_value_all_actions",
+        }:
+            raise ValueError(f"Unknown gripper guidance mode: {mode}")
         actions = original.clone().detach().requires_grad_(True)
         opt = torch.optim.Adam([actions], lr=float(step_size))
         history = []
         for _ in range(int(gradient_steps)):
             opt.zero_grad(set_to_none=True)
-            robust, width = self.gripper_open_robustness(state_dyn, actions, spec, smooth_min_tau)
-            action_penalty = torch.mean((actions - original) ** 2, dim=(1, 2))
+            action_eval = actions
+            if mode in {"world_model_gripper_only", "world_model_gripper_value_only"}:
+                action_eval = original.clone()
+                action_eval[..., -1] = actions[..., -1]
+            if mode in {"world_model_gripper_value_only", "world_model_gripper_value_all_actions"}:
+                robust, width = self.raw_gripper_width_objective(state_dyn, action_eval)
+            else:
+                robust, width = self.gripper_open_robustness(state_dyn, action_eval, spec, smooth_min_tau)
+            delta = action_eval - original
+            action_penalty = torch.mean(delta ** 2, dim=(1, 2))
             objective = float(guidance_scale) * robust - float(action_reg) * action_penalty
             (-objective.mean()).backward()
             opt.step()
             with torch.no_grad():
+                if mode in {"world_model_gripper_only", "world_model_gripper_value_only"}:
+                    keep = original.clone()
+                    keep[..., -1] = actions[..., -1]
+                    actions.copy_(keep)
                 actions.clamp_(-1.0, 1.0)
                 history.append(
                     {
@@ -453,16 +565,28 @@ class DynamicsRefiner:
                     }
                 )
         with torch.no_grad():
-            robust_after, width_after = self.gripper_open_robustness(state_dyn, actions, spec, smooth_min_tau)
+            if mode in {"world_model_gripper_value_only", "world_model_gripper_value_all_actions"}:
+                robust_after, width_after = self.raw_gripper_width_objective(state_dyn, actions)
+            else:
+                robust_after, width_after = self.gripper_open_robustness(state_dyn, actions, spec, smooth_min_tau)
+        delta = actions - original
+        nongrip = delta.clone()
+        nongrip[..., -1] = 0.0
+        grip = delta[..., -1]
         record = {
             "enabled": True,
+            "mode": mode,
             "robust_before": float(robust_before[0].cpu()),
             "robust_after": float(robust_after[0].cpu()),
             "min_width_before": float(width_before[0].min().cpu()),
             "min_width_after": float(width_after[0].min().cpu()),
             "pred_width_before": width_before[0].detach().cpu().numpy().tolist(),
             "pred_width_after": width_after[0].detach().cpu().numpy().tolist(),
-            "action_l2_change": float(torch.linalg.norm(actions - original).detach().cpu()),
+            "action_l2_change": float(torch.linalg.norm(delta).detach().cpu()),
+            "non_gripper_l2_change": float(torch.linalg.norm(nongrip).detach().cpu()),
+            "gripper_l2_change": float(torch.linalg.norm(grip).detach().cpu()),
+            "gripper_action_before": original[0, :, -1].detach().cpu().numpy().tolist(),
+            "gripper_action_after": actions[0, :, -1].detach().cpu().numpy().tolist(),
             "history": history,
         }
         return actions[0].detach().cpu().numpy().astype(np.float32), record
@@ -851,9 +975,342 @@ def make_ordered_stage_action_sampler(
     return action_sampler
 
 
+def make_selection_then_target_action_sampler(
+    policy,
+    guidance: AutomatonGuidance,
+    first_option_names: Sequence[str],
+    middle_target_name: str,
+    n_candidates: int,
+):
+    first_option_idxs = target_idxs_from_names(guidance, first_option_names)
+    middle_idx = target_idxs_from_names(guidance, [middle_target_name])[0]
+    state = {"phase": "first_or", "events": [], "last_selected_option_idx": None}
+
+    def mark_event(step, role, target_idx):
+        event = {
+            "step": int(step),
+            "role": role,
+            "target_idx": int(target_idx),
+            "target_name": guidance.label_names[int(target_idx)],
+        }
+        state["events"].append(event)
+        return event
+
+    def expose_state():
+        action_sampler.phase = state["phase"]
+        action_sampler.events = state["events"]
+        action_sampler.done = state["phase"] == "done"
+
+    def sync(label, step):
+        advanced = False
+        while state["phase"] != "done":
+            if state["phase"] == "first_or":
+                achieved = [idx for idx in first_option_idxs if float(label[idx]) > 0.5]
+                if not achieved:
+                    break
+                last_selected = state.get("last_selected_option_idx")
+                chosen = last_selected if last_selected in achieved else achieved[0]
+                mark_event(step, "first_or", chosen)
+                state["phase"] = "middle"
+                advanced = True
+                continue
+            if state["phase"] == "middle":
+                if float(label[middle_idx]) <= 0.5:
+                    break
+                mark_event(step, "middle", middle_idx)
+                state["phase"] = "done"
+                advanced = True
+                continue
+        expose_state()
+        return advanced
+
+    def current_target_idxs():
+        if state["phase"] == "first_or":
+            return list(first_option_idxs)
+        return [middle_idx]
+
+    def action_sampler(obs, env, step):
+        action_chunks, candidate_probs, automaton_horizon, automaton_label = score_candidate_batch(
+            policy, guidance, obs, env, n_candidates
+        )
+        sync(automaton_label, step)
+        target_idxs = current_target_idxs()
+        target_score_columns = np.stack([guidance.score_label_probs(candidate_probs, idx) for idx in target_idxs], axis=1)
+        candidate_scores = target_score_columns.max(axis=1)
+        candidate_target_pos = target_score_columns.argmax(axis=1)
+        selected_idx = int(np.argmax(candidate_scores))
+        selected_target_pos = int(candidate_target_pos[selected_idx])
+        selected_target_idx = int(target_idxs[selected_target_pos])
+        if state["phase"] == "first_or":
+            state["last_selected_option_idx"] = selected_target_idx
+        opp = guidance.opposite_label_idx(selected_target_idx)
+        record = {
+            "t": int(step),
+            "mode": "selection_then_target",
+            "phase": state["phase"],
+            "first_option_names": list(first_option_names),
+            "middle_target_name": middle_target_name,
+            "target_names": [guidance.label_names[idx] for idx in target_idxs],
+            "target_score_rules": [guidance.score_rule_name(idx) for idx in target_idxs],
+            "current_label": automaton_label.astype(int).tolist(),
+            "selected_idx": selected_idx,
+            "selected_score": float(candidate_scores[selected_idx]),
+            "selected_target_idx": selected_target_idx,
+            "selected_target_name": guidance.label_names[selected_target_idx],
+            "selected_target_score": float(target_score_columns[selected_idx, selected_target_pos]),
+            "selected_target_prob": float(candidate_probs[selected_idx, selected_target_idx]),
+            "selected_opposite_idx": None if opp is None else int(opp),
+            "selected_opposite_name": None if opp is None else guidance.label_names[opp],
+            "selected_opposite_prob": None if opp is None else float(candidate_probs[selected_idx, opp]),
+            "selected_target_scores": {
+                guidance.label_names[idx]: float(target_score_columns[selected_idx, pos])
+                for pos, idx in enumerate(target_idxs)
+            },
+            "pred_probs": candidate_probs[selected_idx].tolist(),
+            "candidate_scores": candidate_scores.tolist(),
+        }
+        return np.asarray(action_chunks[selected_idx, :automaton_horizon, :], dtype=np.float32), record
+
+    action_sampler.sync = sync
+    expose_state()
+    action_sampler.violations = []
+    return action_sampler
+
+
+def make_branch_remaining_action_sampler(
+    policy,
+    guidance: AutomatonGuidance,
+    first_option_names: Sequence[str],
+    middle_target_name: str,
+    n_candidates: int,
+):
+    first_option_idxs = target_idxs_from_names(guidance, first_option_names)
+    middle_idx = target_idxs_from_names(guidance, [middle_target_name])[0]
+    state = {
+        "phase": "first_or",
+        "events": [],
+        "first_choice_idx": None,
+        "remaining_first_idxs": [],
+        "last_selected_option_idx": None,
+    }
+
+    def mark_event(step, role, target_idx):
+        event = {
+            "step": int(step),
+            "role": role,
+            "target_idx": int(target_idx),
+            "target_name": guidance.label_names[int(target_idx)],
+        }
+        state["events"].append(event)
+        return event
+
+    def expose_state():
+        action_sampler.phase = state["phase"]
+        action_sampler.events = state["events"]
+        action_sampler.done = state["phase"] == "done"
+        action_sampler.first_choice_name = None if state["first_choice_idx"] is None else guidance.label_names[state["first_choice_idx"]]
+        action_sampler.remaining_first_name = None if not state["remaining_first_idxs"] else guidance.label_names[state["remaining_first_idxs"][0]]
+
+    def sync(label, step):
+        advanced = False
+        while state["phase"] != "done":
+            if state["phase"] == "first_or":
+                achieved = [idx for idx in first_option_idxs if float(label[idx]) > 0.5]
+                if not achieved:
+                    break
+                last_selected = state.get("last_selected_option_idx")
+                chosen = last_selected if last_selected in achieved else achieved[0]
+                state["first_choice_idx"] = int(chosen)
+                state["remaining_first_idxs"] = [idx for idx in first_option_idxs if idx != chosen]
+                mark_event(step, "first_or", chosen)
+                state["phase"] = "middle"
+                advanced = True
+                continue
+            if state["phase"] == "middle":
+                if float(label[middle_idx]) <= 0.5:
+                    break
+                mark_event(step, "middle", middle_idx)
+                state["phase"] = "remaining_first" if state["remaining_first_idxs"] else "done"
+                advanced = True
+                continue
+            if state["phase"] == "remaining_first":
+                current_remaining = state["remaining_first_idxs"][0]
+                if float(label[current_remaining]) <= 0.5:
+                    break
+                mark_event(step, "remaining_first", current_remaining)
+                state["remaining_first_idxs"].pop(0)
+                state["phase"] = "remaining_first" if state["remaining_first_idxs"] else "done"
+                advanced = True
+                continue
+        expose_state()
+        return advanced
+
+    def current_target_idxs():
+        if state["phase"] == "first_or":
+            return list(first_option_idxs)
+        if state["phase"] == "middle":
+            return [middle_idx]
+        if state["phase"] == "remaining_first":
+            return list(state["remaining_first_idxs"])
+        return [middle_idx]
+
+    def action_sampler(obs, env, step):
+        action_chunks, candidate_probs, automaton_horizon, automaton_label = score_candidate_batch(
+            policy, guidance, obs, env, n_candidates
+        )
+        sync(automaton_label, step)
+        target_idxs = current_target_idxs()
+        target_score_columns = np.stack([guidance.score_label_probs(candidate_probs, idx) for idx in target_idxs], axis=1)
+        candidate_scores = target_score_columns.max(axis=1)
+        candidate_target_pos = target_score_columns.argmax(axis=1)
+        selected_idx = int(np.argmax(candidate_scores))
+        selected_target_pos = int(candidate_target_pos[selected_idx])
+        selected_target_idx = int(target_idxs[selected_target_pos])
+        state["last_selected_option_idx"] = selected_target_idx if state["phase"] == "first_or" else state.get("last_selected_option_idx")
+        selected_opp = guidance.opposite_label_idx(selected_target_idx)
+        expose_state()
+        record = {
+            "t": int(step),
+            "mode": "branch_remaining",
+            "phase": state["phase"],
+            "first_option_names": list(first_option_names),
+            "middle_target_name": middle_target_name,
+            "first_choice_name": action_sampler.first_choice_name,
+            "remaining_first_name": action_sampler.remaining_first_name,
+            "target_names": [guidance.label_names[idx] for idx in target_idxs],
+            "target_score_rules": [guidance.score_rule_name(idx) for idx in target_idxs],
+            "current_label": automaton_label.astype(int).tolist(),
+            "selected_idx": selected_idx,
+            "selected_score": float(candidate_scores[selected_idx]),
+            "selected_target_idx": selected_target_idx,
+            "selected_target_name": guidance.label_names[selected_target_idx],
+            "selected_target_score": float(target_score_columns[selected_idx, selected_target_pos]),
+            "selected_target_prob": float(candidate_probs[selected_idx, selected_target_idx]),
+            "selected_opposite_idx": None if selected_opp is None else int(selected_opp),
+            "selected_opposite_name": None if selected_opp is None else guidance.label_names[selected_opp],
+            "selected_opposite_prob": None if selected_opp is None else float(candidate_probs[selected_idx, selected_opp]),
+            "selected_target_scores": {
+                guidance.label_names[idx]: float(target_score_columns[selected_idx, pos])
+                for pos, idx in enumerate(target_idxs)
+            },
+            "pred_probs": candidate_probs[selected_idx].tolist(),
+            "candidate_scores": candidate_scores.tolist(),
+        }
+        return np.asarray(action_chunks[selected_idx, :automaton_horizon, :], dtype=np.float32), record
+
+    action_sampler.sync = sync
+    expose_state()
+    action_sampler.violations = []
+    return action_sampler
+
+
+def make_cyclic_action_sampler(
+    policy,
+    guidance: AutomatonGuidance,
+    target_names: Sequence[str],
+    n_candidates: int,
+    target_timeout_steps: int,
+    max_target_events: int,
+):
+    target_cycle = target_idxs_from_names(guidance, target_names)
+    state = {"pos": 0, "events": [], "target_start_step": 0, "cycles_completed": 0, "timed_out": False, "timeout_event": None}
+
+    def refresh_public(step):
+        action_sampler.cycle_pos = int(state["pos"])
+        action_sampler.cycles_completed = int(state["cycles_completed"])
+        action_sampler.events = state["events"]
+        action_sampler.done = len(state["events"]) >= int(max_target_events)
+        action_sampler.timed_out = bool(state["timed_out"])
+        action_sampler.timeout_event = state["timeout_event"]
+        action_sampler.current_target_idx = int(target_cycle[state["pos"]])
+        action_sampler.current_target_name = guidance.label_names[target_cycle[state["pos"]]]
+        action_sampler.target_elapsed = int(step - state["target_start_step"])
+
+    def sync(label, step):
+        advanced = False
+        if state["timed_out"] or len(state["events"]) >= int(max_target_events):
+            refresh_public(step)
+            return False
+        while len(state["events"]) < int(max_target_events):
+            target_idx = target_cycle[state["pos"]]
+            if float(label[target_idx]) <= 0.5:
+                break
+            elapsed = int(step - state["target_start_step"])
+            state["events"].append(
+                {
+                    "step": int(step),
+                    "elapsed": elapsed,
+                    "event_idx": len(state["events"]),
+                    "cycle_idx": int(state["cycles_completed"]),
+                    "cycle_pos": int(state["pos"]),
+                    "target_idx": int(target_idx),
+                    "target_name": guidance.label_names[target_idx],
+                }
+            )
+            state["pos"] = (state["pos"] + 1) % len(target_cycle)
+            if state["pos"] == 0:
+                state["cycles_completed"] += 1
+            state["target_start_step"] = int(step)
+            advanced = True
+        if len(state["events"]) < int(max_target_events):
+            elapsed = int(step - state["target_start_step"])
+            if elapsed >= int(target_timeout_steps):
+                target_idx = target_cycle[state["pos"]]
+                state["timed_out"] = True
+                state["timeout_event"] = {
+                    "step": int(step),
+                    "elapsed": elapsed,
+                    "cycle_idx": int(state["cycles_completed"]),
+                    "cycle_pos": int(state["pos"]),
+                    "target_idx": int(target_idx),
+                    "target_name": guidance.label_names[target_idx],
+                    "message": f"target not reached within {int(target_timeout_steps)} steps",
+                }
+        refresh_public(step)
+        return advanced
+
+    def action_sampler(obs, env, step):
+        action_chunks, candidate_probs, automaton_horizon, automaton_label = score_candidate_batch(
+            policy, guidance, obs, env, n_candidates
+        )
+        sync(automaton_label, step)
+        target_label_idx = target_cycle[state["pos"]]
+        candidate_scores = guidance.score_label_probs(candidate_probs, target_label_idx)
+        selected_idx = int(np.argmax(candidate_scores))
+        opp = guidance.opposite_label_idx(target_label_idx)
+        record = {
+            "t": int(step),
+            "mode": "cyclic_ltl",
+            "cycle_names": [guidance.label_names[idx] for idx in target_cycle],
+            "cycle_pos": int(state["pos"]),
+            "cycle_idx": int(state["cycles_completed"]),
+            "event_count": len(state["events"]),
+            "target_elapsed": int(step - state["target_start_step"]),
+            "target_label_idx": int(target_label_idx),
+            "target_label_name": guidance.label_names[target_label_idx],
+            "opposite_label_idx": None if opp is None else int(opp),
+            "opposite_label_name": None if opp is None else guidance.label_names[opp],
+            "score_rule": guidance.score_rule_name(target_label_idx),
+            "current_label": automaton_label.astype(int).tolist(),
+            "selected_idx": selected_idx,
+            "selected_score": float(candidate_scores[selected_idx]),
+            "selected_target_prob": float(candidate_probs[selected_idx, target_label_idx]),
+            "selected_opposite_prob": None if opp is None else float(candidate_probs[selected_idx, opp]),
+            "pred_probs": candidate_probs[selected_idx].tolist(),
+            "candidate_scores": candidate_scores.tolist(),
+        }
+        return np.asarray(action_chunks[selected_idx, :automaton_horizon, :], dtype=np.float32), record
+
+    action_sampler.sync = sync
+    action_sampler.violations = []
+    refresh_public(0)
+    return action_sampler
+
+
 def make_target_action_sampler(
     policy,
     guidance: AutomatonGuidance,
+    spec: ComplexSTLSpec,
     target_name: str,
     n_candidates: int,
     dynamics_refiner: Optional[DynamicsRefiner],
@@ -866,6 +1323,7 @@ def make_target_action_sampler(
     step_size: float,
     action_reg: float,
     smooth_min_tau: float,
+    gripper_guidance_mode: str,
 ):
     target_label_idx = guidance.label_index(target_name)
     events: list[Dict[str, Any]] = []
@@ -912,6 +1370,19 @@ def make_target_action_sampler(
                     step_size=step_size,
                     action_reg=action_reg,
                     smooth_min_tau=smooth_min_tau,
+                    mode=gripper_guidance_mode,
+                )
+            elif safety_kind in {"tcp_rzz_30deg", "tcp_rzz_angle"}:
+                selected, refinement_record = dynamics_refiner.refine_for_rzz(
+                    state["robot"],
+                    state["scene"],
+                    selected,
+                    spec.rzz_spec,
+                    guidance_scale=safety_guidance_scale,
+                    gradient_steps=gradient_steps,
+                    step_size=step_size,
+                    action_reg=action_reg,
+                    action_dims=None,
                 )
         opp = guidance.opposite_label_idx(target_label_idx)
         record = {
@@ -959,157 +1430,53 @@ def make_action_sampler(
         return make_chain_action_sampler(policy, guidance, spec.target_names, n_candidates)
     if spec.mode == "ordered_stage":
         return make_ordered_stage_action_sampler(policy, guidance, spec.stage_target_names, n_candidates)
+    if spec.mode == "selection_then_target":
+        if spec.middle_target_name is None:
+            raise ValueError(f"{spec.name} requires middle_target_name")
+        return make_selection_then_target_action_sampler(
+            policy, guidance, spec.first_option_names, spec.middle_target_name, n_candidates
+        )
+    if spec.mode == "branch_remaining":
+        if spec.middle_target_name is None:
+            raise ValueError(f"{spec.name} requires middle_target_name")
+        return make_branch_remaining_action_sampler(
+            policy, guidance, spec.first_option_names, spec.middle_target_name, n_candidates
+        )
+    if spec.mode == "cyclic":
+        return make_cyclic_action_sampler(
+            policy,
+            guidance,
+            spec.cycle_target_names,
+            n_candidates,
+            target_timeout_steps=int(spec.target_timeout_steps),
+            max_target_events=int(spec.max_target_events),
+        )
     if spec.mode == "target":
+        safety_scale = float(spec.safety_guidance_scale if spec.safety_guidance_scale is not None else args.safety_guidance_scale)
+        gripper_scale = float(spec.gripper_guidance_scale if spec.gripper_guidance_scale is not None else args.gripper_guidance_scale)
+        gradient_steps = int(spec.gradient_steps if spec.gradient_steps is not None else args.gradient_steps)
+        step_size = float(spec.step_size if spec.step_size is not None else args.step_size)
+        action_reg = float(spec.action_reg if spec.action_reg is not None else args.action_reg)
+        smooth_min_tau = float(spec.smooth_min_tau if spec.smooth_min_tau is not None else args.smooth_min_tau)
         return make_target_action_sampler(
             policy,
             guidance,
+            spec,
             spec.target_names[0],
             n_candidates,
             dynamics_refiner=dynamics_refiner,
             safety_kind=None if args.disable_safety_refinement else spec.safety_kind,
             safety_box=safety_box,
             gripper_spec=gripper_spec,
-            safety_guidance_scale=float(args.safety_guidance_scale),
-            gripper_guidance_scale=float(args.gripper_guidance_scale),
-            gradient_steps=int(args.gradient_steps),
-            step_size=float(args.step_size),
-            action_reg=float(args.action_reg),
-            smooth_min_tau=float(args.smooth_min_tau),
+            safety_guidance_scale=safety_scale,
+            gripper_guidance_scale=gripper_scale,
+            gradient_steps=gradient_steps,
+            step_size=step_size,
+            action_reg=action_reg,
+            smooth_min_tau=smooth_min_tau,
+            gripper_guidance_mode=spec.gripper_guidance_mode,
         )
     raise ValueError(f"Unsupported complex STL mode: {spec.mode}")
-
-
-def save_trace_without_video(rollout: Dict[str, Any], output_dir: Path, rollout_tag: str) -> None:
-    rollout_dir = output_dir / rollout_tag
-    rollout_dir.mkdir(parents=True, exist_ok=True)
-    trace_path = rollout_dir / "rollout_trace.npz"
-    scene_snapshot_path = rollout_dir / "scene_snapshot.json"
-    trace = {
-        "actions": np.asarray(rollout["actions"], dtype=np.float32),
-        "rewards": np.asarray(rollout["rewards"], dtype=np.float32),
-        "dones": np.asarray(rollout["dones"], dtype=bool),
-        "scene_states": np.asarray(rollout["scene_states"], dtype=np.float32),
-        "robot_states": np.asarray(rollout["robot_states"], dtype=np.float32),
-        "eef_xy": np.asarray(rollout["eef_xy"], dtype=np.float32),
-        "detected_behavior": np.asarray(rollout["behavior"]),
-        "detected_behavior_step": np.asarray(rollout["behavior_step"], dtype=np.int32),
-        "termination_step": np.asarray(rollout["termination_step"], dtype=np.int32),
-        "termination_reason": np.asarray(rollout["termination_reason"]),
-        "rollout_seed": np.asarray(rollout["seed"], dtype=np.int32),
-        "scene_config": np.asarray(rollout["scene_config"]),
-        "initial_label": np.asarray(rollout["initial_label"], dtype=np.int32),
-        "final_label": np.asarray(rollout["final_label"], dtype=np.int32),
-        "labels_over_time": np.asarray(rollout["labels_over_time"], dtype=np.int32),
-        "pre_settle_label": np.asarray(rollout["pre_settle_label"], dtype=np.int32),
-        "settle_scene_states": np.asarray(rollout["settle_scene_states"], dtype=np.float32),
-        "settle_robot_states": np.asarray(rollout["settle_robot_states"], dtype=np.float32),
-        "settle_action": np.asarray(rollout["settle_action"], dtype=np.float32),
-    }
-    np.savez_compressed(trace_path, **trace)
-    CRU.save_scene_snapshot(rollout["scene_snapshot"], scene_snapshot_path)
-    rollout["video"] = None
-    rollout["trace"] = trace_path
-    rollout["scene_snapshot_path"] = scene_snapshot_path
-    rollout["rollout_dir"] = rollout_dir
-
-
-def save_rollout_diagnostics(rollout: Dict[str, Any]) -> None:
-    rollout_dir = Path(rollout["rollout_dir"])
-    diagnostics_path = rollout_dir / "diagnostics.npz"
-    diagnostics = {
-        "labels_over_time": np.asarray(rollout["labels_over_time"], dtype=np.int32),
-        "gripper_width": np.asarray(rollout.get("gripper_width", []), dtype=np.float32),
-    }
-    if rollout.get("safety_distances") is not None:
-        diagnostics["safety_distances"] = np.asarray(rollout["safety_distances"], dtype=np.float32)
-    np.savez_compressed(diagnostics_path, **diagnostics)
-    rollout["diagnostics"] = diagnostics_path
-
-
-def rollout_summary_payload(rollout: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "task": rollout["task"],
-        "formula": rollout["formula"],
-        "seed": int(rollout["seed"]),
-        "policy": "automaton_sample_rank",
-        "scene_config": rollout["scene_config"],
-        "liveness_satisfied": bool(rollout["liveness_satisfied"]),
-        "safety_satisfied": rollout["safety_satisfied"],
-        "stl_satisfied": bool(rollout["stl_satisfied"]),
-        "success": bool(rollout["success"]),
-        "subgoal_completion_rate": float(rollout["subgoal_completion_rate"]),
-        "completed_subgoals": int(rollout["completed_subgoals"]),
-        "total_subgoals": int(rollout["total_subgoals"]),
-        "target_events": rollout["target_events"],
-        "order_violation": bool(rollout.get("order_violation", False)),
-        "order_violations": rollout.get("order_violations", []),
-        "safety_kind": rollout.get("safety_kind"),
-        "safety_metrics": rollout.get("safety_metrics", {}),
-        "behavior": rollout["behavior"],
-        "first_behavior": rollout["first_behavior"],
-        "first_behavior_step": int(rollout["first_behavior_step"]),
-        "behavior_step": int(rollout["behavior_step"]),
-        "termination_step": int(rollout["termination_step"]),
-        "termination_reason": rollout["termination_reason"],
-        "env_done_step": int(rollout["env_done_step"]),
-        "return": float(rollout["return"]),
-        "initial_label": rollout["initial_label"],
-        "final_label": rollout["final_label"],
-        "video": None if rollout.get("video") is None else str(rollout["video"]),
-        "trace": str(rollout["trace"]),
-        "diagnostics": str(rollout["diagnostics"]),
-        "topdown_plot": str(Path(rollout["rollout_dir"]) / "rollout_xy.png"),
-        "reset_robot_from_pose_file": bool(rollout["reset_robot_from_pose_file"]),
-        "fixed_reset_pose_index": rollout.get("fixed_reset_pose_index"),
-        "reset_pose_filter": rollout["reset_pose_filter"],
-        "settle_steps": int(rollout["settle_steps"]),
-        "settle_action": rollout["settle_action"],
-        "pre_settle_label": rollout["pre_settle_label"],
-        "settle_metrics": rollout["settle_metrics"],
-        "records": rollout["records"],
-    }
-
-
-def evaluate_subgoals(spec: ComplexSTLSpec, events: Sequence[Dict[str, Any]]) -> tuple[int, int, float]:
-    total = spec.required_subgoal_count
-    if spec.mode == "or":
-        completed = 1 if events else 0
-    else:
-        target_names = set(spec.flattened_targets)
-        completed = len({event["target_name"] for event in events if event["target_name"] in target_names})
-    rate = float(completed / total) if total else 0.0
-    return int(completed), int(total), rate
-
-
-def evaluate_safety(
-    spec: ComplexSTLSpec,
-    robot_states: np.ndarray,
-    eef_xy: np.ndarray,
-    safety_box: SafetyBox,
-    gripper_spec: GripperOpenSpec,
-) -> tuple[Optional[bool], Dict[str, Any], Optional[np.ndarray]]:
-    if spec.safety_kind == "eef_avoid_box":
-        distances = signed_distance_to_box_np(eef_xy, safety_box)
-        violation = bool(np.any(distances <= 0.0))
-        metrics = {
-            "kind": "eef_avoid_box",
-            "safety_box": asdict(safety_box.normalized()),
-            "violation": violation,
-            "min_signed_distance": float(np.min(distances)),
-        }
-        return (not violation), metrics, distances
-    if spec.safety_kind == "gripper_open":
-        widths = np.asarray(robot_states, dtype=np.float32)[:, GRIPPER_WIDTH_RAW_ROBOT_IDX]
-        spec_norm = gripper_spec.normalized()
-        violation = bool(np.any(widths < spec_norm.min_width))
-        metrics = {
-            "kind": "gripper_open",
-            "gripper_spec": asdict(spec_norm),
-            "violation": violation,
-            "min_gripper_width": float(np.min(widths)),
-        }
-        return (not violation), metrics, None
-    return None, {}, None
 
 
 def rollout_policy_once(
@@ -1129,6 +1496,7 @@ def rollout_policy_once(
     video_cfg: Dict[str, Any],
     safety_box: SafetyBox,
     gripper_spec: GripperOpenSpec,
+    safety_randomization: Optional[Dict[str, Any]],
     save_video: bool,
     settle_steps: int,
     settle_gripper: float,
@@ -1158,12 +1526,33 @@ def rollout_policy_once(
             settle_scene_states.append(np.asarray(settled_state["scene"], dtype=np.float32).copy())
             settle_robot_states.append(np.asarray(settled_state["robot"], dtype=np.float32).copy())
 
+        rzz_warmup: Dict[str, Any] = {"enabled": False, "mode": spec.rzz_init_mode}
+        warmup_frames: list[np.ndarray] = []
+        if spec.rzz_init_mode == "warmup":
+            obs, rzz_warmup, warmup_frames = apply_rzz_action_warmup(
+                env,
+                obs,
+                spec.rzz_spec,
+                max_steps=int(spec.rzz_warmup_max_steps),
+                tolerance=spec.rzz_warmup_tolerance,
+                save_video=save_video,
+                video_cfg=video_cfg,
+                restack_obs=bool(spec.restack_after_warmup),
+            )
+        elif spec.rzz_init_mode not in {"none", ""}:
+            raise ValueError(f"Unsupported rzz_init_mode for {spec.name}: {spec.rzz_init_mode}")
+
         policy.start_episode()
         scene_snapshot = CRU.capture_scene_snapshot(env)
-        frames = [CRU.render_visual_camera(env, video_cfg)] if save_video else []
+        frames = list(warmup_frames)
+        if save_video:
+            frames.append(CRU.render_visual_camera(env, video_cfg))
 
         start_state = env.get_state()
         start_scene = np.asarray(start_state["scene"], dtype=np.float32).copy()
+        start_robot = np.asarray(start_state["robot"], dtype=np.float32).copy()
+        reset_rzz = float(rzz_from_euler_xyz_np(start_robot[3:6]))
+        reset_tcp_tilt_angle_deg = float(rzz_to_tilt_angle_deg_np(reset_rzz, spec.rzz_spec))
         binaries = CRU.articulated_binaries_from_start_state(start_scene)
         _, label0 = action_sampler.guidance.current_state_and_label(env) if hasattr(action_sampler, "guidance") else (None, None)
         if label0 is None:
@@ -1178,9 +1567,11 @@ def rollout_policy_once(
 
         actions, rewards, dones, records = [], [], [], []
         scene_states = [start_scene.copy()]
-        robot_states = [np.asarray(start_state["robot"], dtype=np.float32).copy()]
+        robot_states = [start_robot.copy()]
         labels_over_time = [label0.astype(int).copy()]
         eef_xy = [robot_states[-1][:2].copy()]
+        tcp_rzz = [reset_rzz]
+        tcp_tilt_angle_deg = [reset_tcp_tilt_angle_deg]
         action_queue: list[np.ndarray] = []
         first_behavior, first_behavior_step = "none", -1
         behavior_events = []
@@ -1212,6 +1603,9 @@ def rollout_policy_once(
             robot_states.append(robot_now.copy())
             labels_over_time.append(label_now.astype(int).copy())
             eef_xy.append(robot_now[:2].copy())
+            rzz_now = float(rzz_from_euler_xyz_np(robot_now[3:6]))
+            tcp_rzz.append(rzz_now)
+            tcp_tilt_angle_deg.append(float(rzz_to_tilt_angle_deg_np(rzz_now, spec.rzz_spec)))
 
             if save_video:
                 frames.append(CRU.render_visual_camera(env, video_cfg))
@@ -1234,6 +1628,9 @@ def rollout_policy_once(
                 advanced = action_sampler.sync(label_now, step + 1)
                 if advanced:
                     action_queue.clear()
+                if getattr(action_sampler, "timed_out", False):
+                    termination_reason = "target_timeout"
+                    break
                 if action_sampler.done:
                     termination_reason = "task_complete"
                     break
@@ -1259,6 +1656,7 @@ def rollout_policy_once(
             "formula": spec.formula,
             "policy": "automaton_sample_rank",
             "scene_config": scene_cfg["name"],
+            "scene_config_path": str(scene_config_path),
             "seed": int(seed),
             "behavior": behavior,
             "first_behavior": first_behavior,
@@ -1276,6 +1674,8 @@ def rollout_policy_once(
             "robot_states": robot_states_np,
             "eef_xy": eef_xy_np,
             "gripper_width": robot_states_np[:, GRIPPER_WIDTH_RAW_ROBOT_IDX].astype(np.float32),
+            "tcp_rzz": np.asarray(tcp_rzz, dtype=np.float32),
+            "tcp_tilt_angle_deg": np.asarray(tcp_tilt_angle_deg, dtype=np.float32),
             "labels_over_time": np.asarray(labels_over_time, dtype=np.int32),
             "initial_label": labels_over_time[0].astype(int).tolist(),
             "final_label": labelf.astype(int).tolist(),
@@ -1293,10 +1693,18 @@ def rollout_policy_once(
             "safety_kind": spec.safety_kind,
             "safety_metrics": safety_metrics,
             "safety_distances": safety_distances,
+            "safety_box": asdict(safety_box.normalized()) if spec.safety_kind == "eef_avoid_box" else None,
+            "rzz_spec": asdict(spec.rzz_spec),
+            "safety_randomization": safety_randomization or {"enabled": False},
             "scene_snapshot": scene_snapshot,
             "reset_robot_from_pose_file": bool(robot_from_pose_file),
             "fixed_reset_pose_index": None if fixed_reset_pose_index is None else int(fixed_reset_pose_index),
             "reset_pose_filter": reset_pose_filter,
+            "reset_rzz": reset_rzz,
+            "reset_tcp_tilt_angle_deg": reset_tcp_tilt_angle_deg,
+            "rzz_warmup": rzz_warmup,
+            "warmup_actions": np.asarray(rzz_warmup.get("actions", []), dtype=np.float32),
+            "warmup_robot_states": np.asarray(rzz_warmup.get("robot_states", []), dtype=np.float32),
             "settle_steps": int(max(0, int(settle_steps))),
             "settle_action": settle_action.astype(float).tolist(),
             "pre_settle_label": np.asarray(pre_settle_label, dtype=np.float32).astype(int).tolist(),
@@ -1311,6 +1719,7 @@ def rollout_policy_once(
         else:
             save_trace_without_video(rollout, output_dir, rollout_tag)
         save_rollout_diagnostics(rollout)
+        write_rollout_rzz_angle_diagnostic_plot(rollout)
         rollout_dir = Path(rollout["rollout_dir"])
         CRU.plot_rollout_xy(
             [rollout],
@@ -1331,254 +1740,6 @@ def attach_guidance(action_sampler, guidance: AutomatonGuidance):
     return action_sampler
 
 
-def task_summary(spec: ComplexSTLSpec, rollouts: Sequence[Dict[str, Any]], n_candidates: int, horizon: int) -> Dict[str, Any]:
-    behavior_counts = Counter(rollout["behavior"] for rollout in rollouts)
-    first_behavior_counts = Counter(rollout["first_behavior"] for rollout in rollouts)
-    event_patterns = Counter(tuple(event["target_name"] for event in rollout["target_events"]) for rollout in rollouts)
-    liveness_count = sum(1 for rollout in rollouts if rollout["liveness_satisfied"])
-    stl_count = sum(1 for rollout in rollouts if rollout["stl_satisfied"])
-    safety_values = [rollout["safety_satisfied"] for rollout in rollouts if rollout["safety_satisfied"] is not None]
-    safety_count = sum(1 for value in safety_values if value)
-    order_violation_count = sum(1 for rollout in rollouts if rollout.get("order_violation", False))
-    return {
-        "task": spec.name,
-        "formula": spec.formula,
-        "mode": spec.mode,
-        "safety_kind": spec.safety_kind,
-        "n_rollouts": len(rollouts),
-        "n_candidates": int(n_candidates),
-        "horizon": int(horizon),
-        "liveness_satisfied_count": int(liveness_count),
-        "liveness_satisfaction_rate": float(liveness_count / len(rollouts)) if rollouts else 0.0,
-        "safety_satisfied_count": None if not safety_values else int(safety_count),
-        "safety_satisfaction_rate": None if not safety_values else float(safety_count / len(safety_values)),
-        "stl_satisfied_count": int(stl_count),
-        "stl_satisfaction_rate": float(stl_count / len(rollouts)) if rollouts else 0.0,
-        "subgoal_completion_rate": float(np.mean([rollout["subgoal_completion_rate"] for rollout in rollouts])) if rollouts else 0.0,
-        "order_violation_count": int(order_violation_count),
-        "order_violation_rate": float(order_violation_count / len(rollouts)) if rollouts else 0.0,
-        "avg_termination_step": float(np.mean([rollout["termination_step"] for rollout in rollouts])) if rollouts else 0.0,
-        "behavior_counts": dict(behavior_counts),
-        "first_behavior_counts": dict(first_behavior_counts),
-        "event_count_patterns": {
-            " -> ".join(pattern) if pattern else "none": count
-            for pattern, count in event_patterns.items()
-        },
-        "rollouts": [
-            {
-                "seed": rollout["seed"],
-                "liveness_satisfied": bool(rollout["liveness_satisfied"]),
-                "safety_satisfied": rollout["safety_satisfied"],
-                "stl_satisfied": bool(rollout["stl_satisfied"]),
-                "subgoal_completion_rate": float(rollout["subgoal_completion_rate"]),
-                "completed_subgoals": int(rollout["completed_subgoals"]),
-                "total_subgoals": int(rollout["total_subgoals"]),
-                "target_events": rollout["target_events"],
-                "order_violation": bool(rollout.get("order_violation", False)),
-                "safety_metrics": rollout.get("safety_metrics", {}),
-                "behavior": rollout["behavior"],
-                "first_behavior": rollout["first_behavior"],
-                "termination_step": rollout["termination_step"],
-                "termination_reason": rollout["termination_reason"],
-                "env_done_step": rollout["env_done_step"],
-                "initial_label": rollout["initial_label"],
-                "final_label": rollout["final_label"],
-                "video": None if rollout.get("video") is None else str(rollout["video"]),
-                "trace": str(rollout.get("trace")),
-                "diagnostics": str(rollout.get("diagnostics")),
-                "topdown_plot": str(Path(rollout.get("rollout_dir", "")) / "rollout_xy.png"),
-            }
-            for rollout in rollouts
-        ],
-    }
-
-
-def write_summary_tables(run_dir: Path, summaries: Sequence[Dict[str, Any]]) -> None:
-    fieldnames = [
-        "task",
-        "mode",
-        "formula",
-        "n_rollouts",
-        "n_candidates",
-        "horizon",
-        "liveness_satisfaction_rate",
-        "safety_satisfaction_rate",
-        "subgoal_completion_rate",
-        "stl_satisfaction_rate",
-        "order_violation_rate",
-        "avg_termination_step",
-        "event_count_patterns",
-    ]
-    rows = []
-    for item in summaries:
-        safety_rate = item["safety_satisfaction_rate"]
-        rows.append(
-            {
-                "task": item["task"],
-                "mode": item["mode"],
-                "formula": item["formula"],
-                "n_rollouts": item["n_rollouts"],
-                "n_candidates": item["n_candidates"],
-                "horizon": item["horizon"],
-                "liveness_satisfaction_rate": f"{item['liveness_satisfaction_rate']:.4f}",
-                "safety_satisfaction_rate": "" if safety_rate is None else f"{safety_rate:.4f}",
-                "subgoal_completion_rate": f"{item['subgoal_completion_rate']:.4f}",
-                "stl_satisfaction_rate": f"{item['stl_satisfaction_rate']:.4f}",
-                "order_violation_rate": f"{item['order_violation_rate']:.4f}",
-                "avg_termination_step": f"{item['avg_termination_step']:.2f}",
-                "event_count_patterns": json.dumps(item["event_count_patterns"], sort_keys=True),
-            }
-        )
-    with (run_dir / "summary_table.csv").open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    with (run_dir / "summary_table.md").open("w") as f:
-        f.write("| task | mode | liveness | safety | subgoal | STL | order violations | n | horizon | events |\n")
-        f.write("|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
-        for row in rows:
-            f.write(
-                f"| {row['task']} | {row['mode']} | {row['liveness_satisfaction_rate']} | "
-                f"{row['safety_satisfaction_rate']} | {row['subgoal_completion_rate']} | "
-                f"{row['stl_satisfaction_rate']} | {row['order_violation_rate']} | "
-                f"{row['n_rollouts']} | {row['horizon']} | `{row['event_count_patterns']}` |\n"
-            )
-    write_summary_table_image(run_dir, rows)
-
-
-def _rate_cell(value: str) -> str:
-    if value is None or value == "":
-        return ""
-    return f"{100.0 * float(value):.0f}%"
-
-
-def _count_events(value: str) -> str:
-    try:
-        events = json.loads(value)
-    except Exception:
-        return value
-    compact = []
-    for name, count in sorted(events.items(), key=lambda item: (-int(item[1]), item[0])):
-        if len(name) > 42:
-            name = name[:39] + "..."
-        compact.append(f"{name}: {count}")
-    return "\n".join(compact[:3])
-
-
-def _task_label(task: str) -> str:
-    labels = {
-        "F_a_or_F_b": "F a OR F b",
-        "F_a_and_F_b": "F a AND F b",
-        "F_button_then_F_drawer": "long chain",
-        "F_drawer_after_button_switch": "drawer after\nbutton+switch",
-        "F_drawer_G_constraint": "drawer +\ngripper safe",
-        "F_switch_G_safety": "switch +\navoid box",
-    }
-    return labels.get(task, task)
-
-
-def _color_for_rate(text: str, *, invert: bool = False) -> str:
-    if not text:
-        return "#f8fafc"
-    value = float(text.rstrip("%")) / 100.0
-    if invert:
-        value = 1.0 - value
-    if value >= 0.8:
-        return "#dcfce7"
-    if value >= 0.5:
-        return "#fef9c3"
-    return "#fee2e2"
-
-
-def write_summary_table_image(run_dir: Path, rows: Sequence[Dict[str, Any]]) -> None:
-    if not rows:
-        return
-
-    import matplotlib.pyplot as plt
-
-    core_headers = ["Task", "Mode", "Live", "Subgoal", "STL", "Order\nviol.", "Avg\nsteps", "Top events"]
-    core_rows = [
-        [
-            _task_label(row["task"]),
-            row["mode"],
-            _rate_cell(row["liveness_satisfaction_rate"]),
-            _rate_cell(row["subgoal_completion_rate"]),
-            _rate_cell(row["stl_satisfaction_rate"]),
-            _rate_cell(row["order_violation_rate"]),
-            row["avg_termination_step"],
-            _count_events(row["event_count_patterns"]),
-        ]
-        for row in rows
-    ]
-    safety_rows = [
-        [_task_label(row["task"]), _rate_cell(row["safety_satisfaction_rate"])]
-        for row in rows
-        if row["safety_satisfaction_rate"] != ""
-    ]
-
-    fig_height = 1.4 + 0.58 * len(core_rows) + (0.9 + 0.28 * len(safety_rows) if safety_rows else 0.0)
-    fig, ax = plt.subplots(figsize=(14.5, fig_height))
-    ax.axis("off")
-    title = f"Complex STL Summary | {rows[0]['n_rollouts']} rollouts"
-    ax.text(0.0, 1.04, title, transform=ax.transAxes, fontsize=15, fontweight="bold", va="bottom")
-
-    core_table = ax.table(
-        cellText=core_rows,
-        colLabels=core_headers,
-        cellLoc="center",
-        colLoc="center",
-        colWidths=[0.16, 0.09, 0.07, 0.08, 0.07, 0.08, 0.07, 0.38],
-        bbox=[0.0, 0.32 if safety_rows else 0.0, 1.0, 0.65 if safety_rows else 0.92],
-    )
-    core_table.auto_set_font_size(False)
-    core_table.set_fontsize(9)
-    for (r, c), cell in core_table.get_celld().items():
-        cell.set_edgecolor("#cbd5e1")
-        cell.set_linewidth(0.6)
-        if r == 0:
-            cell.set_facecolor("#1f2937")
-            cell.get_text().set_color("white")
-            cell.get_text().set_fontweight("bold")
-        else:
-            cell.set_facecolor("#ffffff" if r % 2 else "#f8fafc")
-            if c in (2, 3, 4):
-                cell.set_facecolor(_color_for_rate(core_rows[r - 1][c]))
-            if c == 5:
-                cell.set_facecolor(_color_for_rate(core_rows[r - 1][c], invert=True))
-            if c in (0, 7):
-                cell.get_text().set_ha("left")
-
-    if safety_rows:
-        ax.text(0.0, 0.22, "Safety metrics (only tasks where safety is defined)", transform=ax.transAxes, fontsize=11, fontweight="bold")
-        safety_table = ax.table(
-            cellText=safety_rows,
-            colLabels=["Task", "Safety"],
-            cellLoc="center",
-            colLoc="center",
-            colWidths=[0.3, 0.12],
-            bbox=[0.0, 0.0, 0.42, 0.20],
-        )
-        safety_table.auto_set_font_size(False)
-        safety_table.set_fontsize(9)
-        for (r, c), cell in safety_table.get_celld().items():
-            cell.set_edgecolor("#cbd5e1")
-            cell.set_linewidth(0.6)
-            if r == 0:
-                cell.set_facecolor("#334155")
-                cell.get_text().set_color("white")
-                cell.get_text().set_fontweight("bold")
-            else:
-                cell.set_facecolor("#ffffff" if r % 2 else "#f8fafc")
-                if c == 1:
-                    cell.set_facecolor(_color_for_rate(safety_rows[r - 1][1]))
-                if c == 0:
-                    cell.get_text().set_ha("left")
-
-    out_path = run_dir / "summary_table.png"
-    fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy-ckpt", type=Path, default=DEFAULT_COMPLEX_POLICY_CKPT)
@@ -1593,7 +1754,7 @@ def parse_args() -> argparse.Namespace:
         "--run-for",
         nargs="*",
         default=None,
-        choices=TASK_ORDER,
+        choices=tuple(COMPLEX_STL_SPECS),
         help=(
             "Optional subset of complex STL tasks to run. Omit this flag, or pass it with no values, "
             f"to run all tasks: {', '.join(TASK_ORDER)}."
@@ -1602,6 +1763,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-rollouts", type=int, default=10)
     parser.add_argument("--n-candidates", type=int, default=None, help="Override all task-specific candidate counts.")
     parser.add_argument("--horizon", type=int, default=None, help="Override all task-specific horizons.")
+    parser.add_argument("--angle-goal-deg", type=float, default=None, help="Override the angle safety task target in degrees.")
+    parser.add_argument("--angle-random-range-deg", type=float, nargs=2, default=None, metavar=("MIN", "MAX"))
+    parser.add_argument("--angle-tolerance-deg", type=float, default=None)
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--device", default="auto", help="Use 'auto', 'cpu', or a torch device like 'cuda:0'.")
     parser.add_argument("--reset-pose-files", type=Path, nargs="*", default=list(DEFAULT_RESET_POSE_FILES))
@@ -1616,6 +1780,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Sample a reset pose from the filtered pool for each rollout seed. This is now the default.",
     )
+    parser.add_argument(
+        "--use-scene-config-robot",
+        action="store_true",
+        help="Use the robot pose from the scene config instead of sampling from the reset-pose pool.",
+    )
     parser.add_argument("--settle-steps", type=int, default=DEFAULT_SETTLE_STEPS)
     parser.add_argument("--settle-gripper", type=float, default=DEFAULT_SETTLE_GRIPPER)
     parser.add_argument("--reset-robot-x-min", type=float, default=DEFAULT_COMPLEX_RESET_ROBOT_X_MIN)
@@ -1625,6 +1794,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reset-switch-clearance", type=float, default=DEFAULT_RESET_SWITCH_CLEARANCE)
     parser.add_argument("--disable-reset-pose-filter", action="store_true")
     parser.add_argument("--disable-safety-refinement", action="store_true")
+    parser.add_argument("--disable-safety-randomization", action="store_true")
     parser.add_argument("--safety-guidance-scale", type=float, default=0.5)
     parser.add_argument("--gripper-guidance-scale", type=float, default=10.0)
     parser.add_argument("--gradient-steps", type=int, default=10)
@@ -1643,8 +1813,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    spec_by_name = dict(COMPLEX_STL_SPECS)
+    if args.angle_goal_deg is not None:
+        spec_by_name["angle"] = make_angle_stl_spec(float(args.angle_goal_deg))
     tasks = list(args.tasks) if args.tasks else list(TASK_ORDER)
-    specs = [COMPLEX_STL_SPECS[task] for task in tasks]
+    specs = [spec_by_name[task] for task in tasks]
     reset_robot_x_min = None if args.disable_reset_pose_filter else args.reset_robot_x_min
     reset_robot_x_max = None if args.disable_reset_pose_filter else args.reset_robot_x_max
     reset_robot_y_min = None if args.disable_reset_pose_filter else args.reset_robot_y_min
@@ -1654,21 +1827,39 @@ def main() -> None:
     policy_ckpt_candidate = repo_path(args.policy_ckpt)
     automaton_ckpt_candidate = repo_path(args.automaton_ckpt)
     dynamics_ckpt_candidate = repo_path(args.dynamics_ckpt)
-    scene_config_arg = args.scene_config or DEFAULT_SCENE_CONFIG
-    scene_config_path = resolve_existing_path(repo_path(scene_config_arg))
     visualization_config = resolve_existing_path(repo_path(args.visualization_config))
-    reset_pose_paths = resolve_reset_pose_paths(args.reset_pose_files)
-    reset_pose_pool, reset_pose_meta = load_reset_pose_pool(reset_pose_paths)
-    reset_poses, reset_pose_filter = filter_complex_reset_poses(
-        reset_pose_pool,
-        robot_x_min=reset_robot_x_min,
-        robot_x_max=reset_robot_x_max,
-        robot_y_min=reset_robot_y_min,
-        robot_y_max=reset_robot_y_max,
-        switch_clearance=reset_switch_clearance,
-    )
-    reset_pose_filter = {**reset_pose_filter, **reset_pose_meta}
-    fixed_reset_pose_index = None if args.sample_reset_poses or args.fixed_reset_pose_index is None else int(args.fixed_reset_pose_index)
+    scene_config_args = {
+        spec.name: (args.scene_config or spec.scene_config or DEFAULT_SCENE_CONFIG)
+        for spec in specs
+    }
+    scene_config_paths = {
+        spec.name: resolve_existing_path(repo_path(scene_config_args[spec.name]))
+        for spec in specs
+    }
+    if args.use_scene_config_robot:
+        reset_pose_paths = []
+        reset_poses = []
+        reset_pose_filter = {
+            "enabled": False,
+            "using_scene_config_robot": True,
+            "filtered_count": 0,
+            "sources": [],
+            "total_count": 0,
+        }
+        fixed_reset_pose_index = None
+    else:
+        reset_pose_paths = resolve_reset_pose_paths(args.reset_pose_files)
+        reset_pose_pool, reset_pose_meta = load_reset_pose_pool(reset_pose_paths)
+        reset_poses, reset_pose_filter = filter_complex_reset_poses(
+            reset_pose_pool,
+            robot_x_min=reset_robot_x_min,
+            robot_x_max=reset_robot_x_max,
+            robot_y_min=reset_robot_y_min,
+            robot_y_max=reset_robot_y_max,
+            switch_clearance=reset_switch_clearance,
+        )
+        reset_pose_filter = {**reset_pose_filter, **reset_pose_meta, "using_scene_config_robot": False}
+        fixed_reset_pose_index = None if args.sample_reset_poses or args.fixed_reset_pose_index is None else int(args.fixed_reset_pose_index)
 
     if args.safety_box is None:
         safety_box = SafetyBox()
@@ -1692,23 +1883,44 @@ def main() -> None:
         "automaton_ckpt_exists": automaton_ckpt_candidate.exists(),
         "dynamics_ckpt": str(dynamics_ckpt_candidate),
         "dynamics_ckpt_exists": dynamics_ckpt_candidate.exists(),
-        "scene_config": str(scene_config_path),
+        "scene_config": "override" if args.scene_config is not None else "per_task",
+        "scene_configs": {spec.name: str(scene_config_paths[spec.name]) for spec in specs},
         "visualization_config": str(visualization_config),
         "output_dir": str(run_dir),
         "requested_name": args.name,
         "run_name": run_dir.name,
-        "scene_config_arg": str(scene_config_arg),
+        "scene_config_arg": None if args.scene_config is None else str(args.scene_config),
         "tasks": tasks,
+        "angle_goal_deg_override": None if args.angle_goal_deg is None else float(args.angle_goal_deg),
         "task_specs": [
             {
                 "name": spec.name,
                 "mode": spec.mode,
+                "category": spec.category,
                 "formula": spec.formula,
                 "target_names": list(spec.target_names),
                 "stage_target_names": [list(stage) for stage in spec.stage_target_names],
+                "first_option_names": list(spec.first_option_names),
+                "middle_target_name": spec.middle_target_name,
+                "cycle_target_names": list(spec.cycle_target_names),
                 "safety_kind": spec.safety_kind,
+                "scene_config": str(scene_config_paths[spec.name]),
                 "horizon": int(args.horizon if args.horizon is not None else spec.default_horizon),
                 "n_candidates": int(args.n_candidates if args.n_candidates is not None else spec.default_n_candidates),
+                "target_timeout_steps": int(spec.target_timeout_steps),
+                "max_target_events": int(spec.max_target_events),
+                "safety_guidance_scale": spec.safety_guidance_scale,
+                "gripper_guidance_scale": spec.gripper_guidance_scale,
+                "gradient_steps": spec.gradient_steps,
+                "step_size": spec.step_size,
+                "action_reg": spec.action_reg,
+                "smooth_min_tau": spec.smooth_min_tau,
+                "gripper_guidance_mode": spec.gripper_guidance_mode,
+                "rzz_spec": asdict(spec.rzz_spec),
+                "rzz_init_mode": spec.rzz_init_mode,
+                "rzz_warmup_max_steps": int(spec.rzz_warmup_max_steps),
+                "rzz_warmup_tolerance": spec.rzz_warmup_tolerance,
+                "restack_after_warmup": bool(spec.restack_after_warmup),
                 "prompt": spec.prompt,
             }
             for spec in specs
@@ -1716,12 +1928,23 @@ def main() -> None:
         "n_rollouts": int(args.n_rollouts),
         "seed_start": int(args.seed_start),
         "device": args.device,
+        "use_scene_config_robot": bool(args.use_scene_config_robot),
         "reset_pose_filter": reset_pose_filter,
-        "reset_pose_selection": "sample_per_rollout_seed" if fixed_reset_pose_index is None else "fixed_index",
+        "reset_pose_selection": (
+            "scene_config_robot"
+            if args.use_scene_config_robot
+            else ("sample_per_rollout_seed" if fixed_reset_pose_index is None else "fixed_index")
+        ),
         "fixed_reset_pose_index": fixed_reset_pose_index,
         "settle_steps": int(args.settle_steps),
         "settle_gripper": float(args.settle_gripper),
         "disable_safety_refinement": bool(args.disable_safety_refinement),
+        "safety_randomization": safety_randomization_plan(
+            safety_box,
+            enabled=not bool(args.disable_safety_randomization),
+            rzz_angle_deg_range=args.angle_random_range_deg,
+            rzz_tolerance_deg=args.angle_tolerance_deg,
+        ),
         "safety_box": asdict(safety_box.normalized()),
         "gripper_spec": asdict(gripper_spec.normalized()),
         "safety_guidance_scale": float(args.safety_guidance_scale),
@@ -1774,6 +1997,7 @@ def main() -> None:
     for spec in specs:
         task_horizon = int(args.horizon if args.horizon is not None else spec.default_horizon)
         task_n_candidates = int(args.n_candidates if args.n_candidates is not None else spec.default_n_candidates)
+        task_scene_config_path = scene_config_paths[spec.name]
         task_dir = run_dir / spec.name
         task_dir.mkdir(parents=True, exist_ok=True)
         write_json(
@@ -1781,28 +2005,61 @@ def main() -> None:
             {
                 "name": spec.name,
                 "mode": spec.mode,
+                "category": spec.category,
                 "formula": spec.formula,
                 "target_names": list(spec.target_names),
                 "stage_target_names": [list(stage) for stage in spec.stage_target_names],
+                "first_option_names": list(spec.first_option_names),
+                "middle_target_name": spec.middle_target_name,
+                "cycle_target_names": list(spec.cycle_target_names),
                 "safety_kind": spec.safety_kind,
+                "scene_config": str(task_scene_config_path),
                 "horizon": task_horizon,
                 "n_candidates": task_n_candidates,
+                "target_timeout_steps": int(spec.target_timeout_steps),
+                "max_target_events": int(spec.max_target_events),
+                "safety_guidance_scale": spec.safety_guidance_scale,
+                "gripper_guidance_scale": spec.gripper_guidance_scale,
+                "gradient_steps": spec.gradient_steps,
+                "step_size": spec.step_size,
+                "action_reg": spec.action_reg,
+                "smooth_min_tau": spec.smooth_min_tau,
+                "gripper_guidance_mode": spec.gripper_guidance_mode,
+                "rzz_spec": asdict(spec.rzz_spec),
+                "rzz_init_mode": spec.rzz_init_mode,
+                "rzz_warmup_max_steps": int(spec.rzz_warmup_max_steps),
+                "rzz_warmup_tolerance": spec.rzz_warmup_tolerance,
+                "restack_after_warmup": bool(spec.restack_after_warmup),
+                "safety_randomization": safety_randomization_plan(
+                    safety_box,
+                    enabled=not bool(args.disable_safety_randomization),
+                    rzz_angle_deg_range=args.angle_random_range_deg,
+                    rzz_tolerance_deg=args.angle_tolerance_deg,
+                ),
             },
         )
-        write_json(task_dir / "scene_config_resolved.json", load_json(scene_config_path))
+        write_json(task_dir / "scene_config_resolved.json", load_json(task_scene_config_path))
 
         print(f"\nTask {spec.name}: {spec.formula}")
         rollouts = []
         for rollout_idx in range(int(args.n_rollouts)):
             seed = int(args.seed_start) + rollout_idx
             tag = f"rollout_{rollout_idx:03d}_seed_{seed:03d}"
-            action_sampler = make_action_sampler(
+            rollout_spec, rollout_safety_box, safety_randomization = randomized_safety_context_for_rollout(
                 spec,
+                safety_box,
+                seed=seed,
+                enabled=not bool(args.disable_safety_randomization),
+                rzz_angle_deg_range=args.angle_random_range_deg,
+                rzz_tolerance_deg=args.angle_tolerance_deg,
+            )
+            action_sampler = make_action_sampler(
+                rollout_spec,
                 policy,
                 guidance,
                 task_n_candidates,
                 dynamics_refiner,
-                safety_box,
+                rollout_safety_box,
                 gripper_spec,
                 args,
             )
@@ -1811,9 +2068,9 @@ def main() -> None:
                 seed=seed,
                 policy=policy,
                 ckpt_dict=ckpt_dict,
-                spec=spec,
+                spec=rollout_spec,
                 action_sampler=action_sampler,
-                scene_config_path=scene_config_path,
+                scene_config_path=task_scene_config_path,
                 reset_poses=reset_poses or [],
                 reset_pose_filter=reset_pose_filter,
                 fixed_reset_pose_index=fixed_reset_pose_index,
@@ -1821,8 +2078,9 @@ def main() -> None:
                 rollout_tag=tag,
                 horizon=task_horizon,
                 video_cfg=video_cfg,
-                safety_box=safety_box,
+                safety_box=rollout_safety_box,
                 gripper_spec=gripper_spec,
+                safety_randomization=safety_randomization,
                 save_video=not args.no_video,
                 settle_steps=int(args.settle_steps),
                 settle_gripper=float(args.settle_gripper),
@@ -1848,7 +2106,21 @@ def main() -> None:
                 save_path=task_dir / "task_rollouts_xy.png",
                 display_inline=False,
             )
+            write_rzz_angle_diagnostic_plot(task_dir, spec, rollouts)
         all_task_summaries.append(summary)
+        write_summary_tables(run_dir, all_task_summaries)
+        write_json(
+            run_dir / "summary_partial.json",
+            {
+                "run": planned,
+                "policy_epoch": policy_epoch,
+                "automaton": guidance.meta,
+                "dynamics": None if dynamics_refiner is None else dynamics_refiner.meta,
+                "completed_tasks": [item["task"] for item in all_task_summaries],
+                "missing_tasks": [item.name for item in specs if item.name not in {s["task"] for s in all_task_summaries}],
+                "tasks": all_task_summaries,
+            },
+        )
 
     write_json(
         run_dir / "summary.json",

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Run an LLM-planned FLOWER VLA baseline on the complex CALVIN STL tasks.
+"""Run static and in-loop LLM-planned FLOWER VLA baselines.
 
-This baseline gives the STL formula to a language planner once, before the
-rollout.  The planner returns a fixed list of natural-language CALVIN primitive
-commands, and FLOWER executes that list with a fixed time budget per command.
+Both LLM baselines know the same set of FLOWER/CALVIN primitive language
+commands.  They decompose the STL into the executable liveness/order part and do
+not add safety language to the primitive commands.  Safety is still evaluated
+after rollout, so the comparison shows whether the VLA itself can honor safety
+from the plain VLA full-language prompt, while the LLM variants isolate planning.
 
-For fairness, the online controller does not use proposition labels, world-model
-scores, or STL robustness to decide which command to run next.  Labels are used
-only for post-hoc evaluation and optional early termination after the full STL
-is already satisfied.  Safety terms are expressed as plain language modifiers,
-not as oracle geometry or extra controller logic.
+Static mode plans once before execution, producing a sequence like
+``[[a, b], c]``.  Lists mean an explicit OR; the rollout samples one option.
+In-loop mode replans at high-level command boundaries from the observed history
+of completed primitive propositions.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import sys
 import time
 from dataclasses import asdict
@@ -53,7 +55,7 @@ import robomimic.envs  # noqa: F401
 import robomimic.utils.file_utils as FileUtils
 
 from calvin_experiments import calvin_rollout_utils as CRU
-from calvin_experiments.run_complex_stl_automaton import (
+from calvin_experiments.complex_stl_experiment_utils import (
     COMPLEX_STL_SPECS,
     DEFAULT_COMPLEX_RESET_ROBOT_X_MAX,
     DEFAULT_COMPLEX_RESET_ROBOT_X_MIN,
@@ -61,13 +63,13 @@ from calvin_experiments.run_complex_stl_automaton import (
     DEFAULT_COMPLEX_RESET_ROBOT_Y_MIN,
     DEFAULT_RESET_POSE_FILES,
     DEFAULT_SCENE_CONFIG,
-    DEFAULT_VISUALIZATION_CONFIG,
     GripperOpenSpec,
     SafetyBox,
-    TASK_ORDER,
+    SpecMonitor,
     evaluate_safety,
     evaluate_subgoals,
     filter_complex_reset_poses,
+    labels_for_scene,
     load_reset_pose_pool,
     make_fixed_scene_robot,
     resolve_reset_pose_paths,
@@ -81,6 +83,7 @@ from calvin_experiments.run_dynaguide_articulated_automaton import (
     DEFAULT_RESET_SWITCH_CLEARANCE,
     DEFAULT_SETTLE_GRIPPER,
     DEFAULT_SETTLE_STEPS,
+    DEFAULT_VISUALIZATION_CONFIG,
     format_onehot,
     idle_action_from_checkpoint,
     load_json,
@@ -89,117 +92,244 @@ from calvin_experiments.run_dynaguide_articulated_automaton import (
     settle_metrics,
     write_json,
 )
-from run_flower_complex_stls import SpecMonitor, labels_for_scene
 from flower_our_env_rollout import FlowerPolicyAdapter, load_flower_model, resolve_device
 
 
 LLM_PRIMITIVE_GROUNDING: Dict[str, str] = {
     "button_pressed": "press the button to turn on the led light",
+    "door_left": "push the sliding door to the left side",
+    "door_right": "push the sliding door to the right side",
     "switch_off": "use the switch to turn off the light bulb",
+    "switch_on": "use the switch to turn on the light bulb",
     "drawer_closed": "push the handle to close the drawer",
     "drawer_open": "pull the handle to open the drawer",
-    "door_right": "push the sliding door to the right side",
+}
+
+LLM_PRIMITIVE_ALIASES: Dict[str, str] = {
+    "button_on": "button_pressed",
+}
+
+DEFAULT_LLM_TASK_ORDER = (
+    "selection",
+    "unordered",
+    "conditional",
+    "chained",
+    "branched",
+    "cyclic",
+)
+
+GENERATED_LLM_PLANS: Dict[str, Dict[str, Any]] = {
+    "selection": {
+        "task_name": "selection",
+        "formula": "F(door_left OR switch_off OR button_on)",
+        "open_loop_plan": [["door_left", "switch_off", "button_on"]],
+        "closed_loop_policy": [
+            {
+                "if_history_contains": [],
+                "and_history_not_contains": ["door_left", "switch_off", "button_on"],
+                "next": ["door_left", "switch_off", "button_on"],
+            }
+        ],
+        "notes": "This is a simple liveness disjunction: eventually complete any one of the three executable primitives.",
+    },
+    "unordered": {
+        "task_name": "unordered",
+        "formula": "F door_left AND F switch_off AND F button_on",
+        "open_loop_plan": ["door_left", "switch_off", "button_on"],
+        "closed_loop_policy": [
+            {"if_history_contains": [], "and_history_not_contains": ["door_left"], "next": "door_left"},
+            {"if_history_contains": ["door_left"], "and_history_not_contains": ["switch_off"], "next": "switch_off"},
+            {
+                "if_history_contains": ["door_left", "switch_off"],
+                "and_history_not_contains": ["button_on"],
+                "next": "button_on",
+            },
+        ],
+        "notes": "The task requires all three liveness goals eventually, with no ordering constraint. The open-loop plan chooses one valid order.",
+    },
+    "conditional": {
+        "task_name": "conditional",
+        "formula": "F(button_on AND F(switch_off AND F drawer_closed))",
+        "open_loop_plan": ["button_on", "switch_off", "drawer_closed"],
+        "closed_loop_policy": [
+            {"if_history_contains": [], "and_history_not_contains": ["button_on"], "next": "button_on"},
+            {"if_history_contains": ["button_on"], "and_history_not_contains": ["switch_off"], "next": "switch_off"},
+            {
+                "if_history_contains": ["button_on", "switch_off"],
+                "and_history_not_contains": ["drawer_closed"],
+                "next": "drawer_closed",
+            },
+        ],
+        "notes": (
+            "The executable temporal structure is an ordering constraint: button_on and switch_off must occur before "
+            "drawer_closed. The open-loop plan chooses button_on before switch_off, since their relative order is not otherwise constrained."
+        ),
+    },
+    "chained": {
+        "task_name": "chained",
+        "formula": "F(button_on AND F(door_right AND F(switch_off AND F drawer_closed)))",
+        "open_loop_plan": ["button_on", "door_right", "switch_off", "drawer_closed"],
+        "closed_loop_policy": [
+            {"if_history_contains": [], "and_history_not_contains": ["button_on"], "next": "button_on"},
+            {"if_history_contains": ["button_on"], "and_history_not_contains": ["door_right"], "next": "door_right"},
+            {
+                "if_history_contains": ["button_on", "door_right"],
+                "and_history_not_contains": ["switch_off"],
+                "next": "switch_off",
+            },
+            {
+                "if_history_contains": ["button_on", "door_right", "switch_off"],
+                "and_history_not_contains": ["drawer_closed"],
+                "next": "drawer_closed",
+            },
+        ],
+        "notes": "This is a strict temporal chain: each primitive must eventually occur after the previous one.",
+    },
+    "branched": {
+        "task_name": "branched",
+        "formula": "F((button_on AND F(drawer_closed AND F switch_off)) OR (switch_off AND F(drawer_closed AND F button_on)))",
+        "open_loop_plan": [["button_on", "switch_off"], "drawer_closed"],
+        "closed_loop_policy": [
+            {
+                "if_history_contains": [],
+                "and_history_not_contains": ["button_on", "switch_off"],
+                "next": ["button_on", "switch_off"],
+            },
+            {"if_history_contains": ["button_on"], "and_history_not_contains": ["drawer_closed"], "next": "drawer_closed"},
+            {"if_history_contains": ["switch_off"], "and_history_not_contains": ["drawer_closed"], "next": "drawer_closed"},
+            {
+                "if_history_contains": ["button_on", "drawer_closed"],
+                "and_history_not_contains": ["switch_off"],
+                "next": "switch_off",
+            },
+            {
+                "if_history_contains": ["switch_off", "drawer_closed"],
+                "and_history_not_contains": ["button_on"],
+                "next": "button_on",
+            },
+        ],
+        "notes": (
+            "The previous open-loop plan incorrectly used a non-primitive placeholder. This version keeps only allowed primitives. "
+            "The closed-loop policy handles the branch-dependent remaining option after drawer_closed."
+        ),
+    },
+    "cyclic": {
+        "task_name": "cyclic",
+        "formula": "G F(drawer_open AND F(switch_on AND F(drawer_closed AND F switch_off)))",
+        "open_loop_plan": ["drawer_open", "switch_on", "drawer_closed", "switch_off"],
+        "closed_loop_policy": [
+            {"if_history_contains": [], "and_history_not_contains": ["drawer_open"], "next": "drawer_open"},
+            {"if_history_contains": ["drawer_open"], "and_history_not_contains": ["switch_on"], "next": "switch_on"},
+            {
+                "if_history_contains": ["drawer_open", "switch_on"],
+                "and_history_not_contains": ["drawer_closed"],
+                "next": "drawer_closed",
+            },
+            {
+                "if_history_contains": ["drawer_open", "switch_on", "drawer_closed"],
+                "and_history_not_contains": ["switch_off"],
+                "next": "switch_off",
+            },
+        ],
+        "notes": (
+            "The executable cycle is drawer_open, then switch_on, then drawer_closed, then switch_off. Since the requested schema "
+            "tracks only containment history and has no reset or loop counter, the open-loop plan returns one cycle and the closed-loop "
+            "policy completes one cycle from an empty history."
+        ),
+    },
 }
 
 
-LLM_TASK_PLANS: Dict[str, Dict[str, Any]] = {
-    "F_a_or_F_b": {
-        "planner_input": "F button_pressed OR F switch_off",
-        "strategy": "Satisfy the first disjunct with an available primitive command.",
-        "dropped_clauses": [],
-        "commands": [
-            {"target": "button_pressed", "instruction": LLM_PRIMITIVE_GROUNDING["button_pressed"]},
-        ],
-    },
-    "F_a_and_F_b": {
-        "planner_input": "F button_pressed AND F switch_off",
-        "strategy": "Linearize the unordered eventual goals into primitive commands.",
-        "dropped_clauses": [],
-        "commands": [
-            {"target": "button_pressed", "instruction": LLM_PRIMITIVE_GROUNDING["button_pressed"]},
-            {"target": "switch_off", "instruction": LLM_PRIMITIVE_GROUNDING["switch_off"]},
-        ],
-    },
-    "F_button_then_F_drawer": {
-        "planner_input": "F(drawer_closed -> F switch_off -> F button_pressed -> F door_right -> F drawer_open)",
-        "strategy": "Preserve the ordered chain exactly as primitive commands.",
-        "dropped_clauses": [],
-        "commands": [
-            {"target": "drawer_closed", "instruction": LLM_PRIMITIVE_GROUNDING["drawer_closed"]},
-            {"target": "switch_off", "instruction": LLM_PRIMITIVE_GROUNDING["switch_off"]},
-            {"target": "button_pressed", "instruction": LLM_PRIMITIVE_GROUNDING["button_pressed"]},
-            {"target": "door_right", "instruction": LLM_PRIMITIVE_GROUNDING["door_right"]},
-            {"target": "drawer_open", "instruction": LLM_PRIMITIVE_GROUNDING["drawer_open"]},
-        ],
-    },
-    "F_drawer_after_button_switch": {
-        "planner_input": "F drawer_closed AND (!drawer_closed U (button_pressed AND switch_off))",
-        "strategy": "Do the prerequisite button and switch commands before the drawer command.",
-        "dropped_clauses": [],
-        "commands": [
-            {"target": "button_pressed", "instruction": LLM_PRIMITIVE_GROUNDING["button_pressed"]},
-            {"target": "switch_off", "instruction": LLM_PRIMITIVE_GROUNDING["switch_off"]},
-            {"target": "drawer_closed", "instruction": LLM_PRIMITIVE_GROUNDING["drawer_closed"]},
-        ],
-    },
-    "F_drawer_G_constraint": {
-        "planner_input": "F drawer_closed AND G gripper_open",
-        "strategy": "Combine the liveness primitive with the global gripper-open constraint as a language instruction.",
-        "dropped_clauses": [],
-        "commands": [
-            {
-                "target": "drawer_closed",
-                "instruction": "push the handle to close the drawer while keeping the gripper open",
-            },
-        ],
-    },
-    "F_switch_G_safety": {
-        "planner_input": "F switch_off AND G avoid_unsafe_square",
-        "strategy": "Combine the liveness primitive with the global unsafe-region constraint as a language instruction.",
-        "dropped_clauses": [],
-        "commands": [
-            {
-                "target": "switch_off",
-                "instruction": "use the switch to turn off the light bulb while keeping the robot arm out of the unsafe square",
-            },
-        ],
-    },
-}
+def normalize_primitive_options(step: str | Sequence[str]) -> list[str]:
+    if isinstance(step, str):
+        options = [canonical_primitive_name(step)]
+    else:
+        options = [canonical_primitive_name(str(item)) for item in step]
+    if not options:
+        raise ValueError("LLM plan step contains no primitive options")
+    for primitive in options:
+        if primitive not in LLM_PRIMITIVE_GROUNDING:
+            raise ValueError(f"Unknown LLM primitive {primitive!r}")
+    return options
 
 
-def plan_for_spec(spec) -> Dict[str, Any]:
-    if spec.name not in LLM_TASK_PLANS:
-        raise KeyError(f"No LLM plan registered for task {spec.name}")
-    plan = json.loads(json.dumps(LLM_TASK_PLANS[spec.name]))
-    plan["task"] = spec.name
-    plan["formula"] = spec.formula
-    return plan
+def canonical_primitive_name(name: str) -> str:
+    return LLM_PRIMITIVE_ALIASES.get(str(name), str(name))
+
+
+def canonicalize_condition_names(names: Sequence[str]) -> list[str]:
+    return [canonical_primitive_name(name) for name in names]
+
+
+def canonicalize_policy_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "if_history_contains": canonicalize_condition_names(rule.get("if_history_contains", [])),
+        "and_history_not_contains": canonicalize_condition_names(rule.get("and_history_not_contains", [])),
+        "next": normalize_primitive_options(rule["next"]),
+    }
+
+
+def canonicalized_generated_plan(task_name: str) -> Dict[str, Any]:
+    if task_name not in GENERATED_LLM_PLANS:
+        raise KeyError(f"No generated LLM plan registered for task {task_name}")
+    raw_plan = GENERATED_LLM_PLANS[task_name]
+    canonical_steps = [normalize_primitive_options(step) for step in raw_plan["open_loop_plan"]]
+    canonical_policy = [canonicalize_policy_rule(rule) for rule in raw_plan["closed_loop_policy"]]
+    return {
+        **raw_plan,
+        "task_name": task_name,
+        "canonical_open_loop_plan": canonical_steps,
+        "canonical_closed_loop_policy": canonical_policy,
+        "primitive_aliases": dict(LLM_PRIMITIVE_ALIASES),
+    }
+
+
+def primitive_options_payload(options: Sequence[str]) -> Dict[str, Any]:
+    return {
+        "primitive_options": list(options),
+        "instruction_options": [LLM_PRIMITIVE_GROUNDING[name] for name in options],
+    }
+
+
+def plan_for_spec(spec, llm_mode: str) -> Dict[str, Any]:
+    generated_plan = canonicalized_generated_plan(spec.name)
+    steps = list(generated_plan["canonical_open_loop_plan"])
+    return {
+        "task": spec.name,
+        "formula": spec.formula,
+        "planner_input": generated_plan["formula"],
+        "llm_mode": llm_mode,
+        "planning_scope": "primitive liveness/order planning only",
+        "safety_terms_not_planned": [],
+        "strategy": generated_plan["notes"],
+        "llm_generated_plan": generated_plan,
+        "static_steps": [primitive_options_payload(options) for options in steps],
+    }
 
 
 def make_command_schedule(plan: Dict[str, Any], horizon: int, subtask_steps: Optional[int]) -> list[Dict[str, Any]]:
-    commands = list(plan["commands"])
-    if not commands:
-        raise ValueError(f"LLM plan for {plan['task']} contains no commands")
+    steps = list(plan["static_steps"])
+    if not steps:
+        raise ValueError(f"LLM plan for {plan['task']} contains no steps")
     if subtask_steps is not None:
-        budgets = [int(subtask_steps)] * len(commands)
+        budgets = [int(subtask_steps)] * len(steps)
     else:
-        base = int(horizon) // len(commands)
-        remainder = int(horizon) % len(commands)
-        budgets = [base + (1 if idx < remainder else 0) for idx in range(len(commands))]
+        base = int(horizon) // len(steps)
+        remainder = int(horizon) % len(steps)
+        budgets = [base + (1 if idx < remainder else 0) for idx in range(len(steps))]
     if any(steps <= 0 for steps in budgets):
         raise ValueError(f"Invalid command schedule for horizon={horizon}, budgets={budgets}")
     schedule = []
     start = 0
-    for idx, (command, steps) in enumerate(zip(commands, budgets)):
-        end = start + int(steps)
+    for idx, (step_payload, budget) in enumerate(zip(steps, budgets)):
+        end = start + int(budget)
         schedule.append(
             {
                 "idx": int(idx),
                 "start_step": int(start),
                 "end_step_exclusive": int(end),
-                "budget": int(steps),
-                "target": command.get("target"),
-                "instruction": command["instruction"],
+                "budget": int(budget),
+                **step_payload,
             }
         )
         start = end
@@ -213,6 +343,60 @@ def command_for_step(schedule: Sequence[Dict[str, Any]], step: int) -> Dict[str,
     return schedule[-1]
 
 
+def choose_primitive_command(command: Dict[str, Any]) -> Dict[str, Any]:
+    options = list(command["primitive_options"])
+    primitive = random.choice(options)
+    return {
+        **command,
+        "selected_primitive": primitive,
+        "target": primitive,
+        "instruction": LLM_PRIMITIVE_GROUNDING[primitive],
+    }
+
+
+def default_command_budget(spec, horizon: int, subtask_steps: Optional[int]) -> int:
+    if subtask_steps is not None:
+        return int(subtask_steps)
+    step_count = max(1, len(GENERATED_LLM_PLANS[spec.name]["open_loop_plan"]))
+    return max(1, int(horizon) // step_count)
+
+
+def closed_loop_primitive_options(spec, monitor: SpecMonitor) -> list[str]:
+    if monitor.done:
+        return []
+    generated_plan = canonicalized_generated_plan(spec.name)
+    achieved = set(canonicalize_condition_names(monitor.achieved_names()))
+    for rule in generated_plan["canonical_closed_loop_policy"]:
+        required = set(rule["if_history_contains"])
+        forbidden = set(rule["and_history_not_contains"])
+        if required.issubset(achieved) and not forbidden.intersection(achieved):
+            return list(rule["next"])
+    return []
+
+
+def make_closed_loop_command(
+    *,
+    spec,
+    monitor: SpecMonitor,
+    step: int,
+    command_idx: int,
+    budget: int,
+    horizon: int,
+) -> Optional[Dict[str, Any]]:
+    options = closed_loop_primitive_options(spec, monitor)
+    if not options:
+        return None
+    command = {
+        "idx": int(command_idx),
+        "start_step": int(step),
+        "end_step_exclusive": int(min(horizon, step + int(budget))),
+        "budget": int(budget),
+        **primitive_options_payload(options),
+        "history": list(monitor.achieved_names()),
+    }
+    return choose_primitive_command(command)
+
+
 def rollout_llm_flower_once(
     *,
     seed: int,
@@ -220,7 +404,9 @@ def rollout_llm_flower_once(
     flower_policy: FlowerPolicyAdapter,
     spec,
     llm_plan: Dict[str, Any],
-    command_schedule: Sequence[Dict[str, Any]],
+    llm_mode: str,
+    command_schedule: Optional[Sequence[Dict[str, Any]]],
+    command_budget: int,
     scene_config_path: Path,
     reset_poses: Sequence[np.ndarray],
     reset_pose_filter: Dict[str, Any],
@@ -238,6 +424,7 @@ def rollout_llm_flower_once(
     stop_on_env_done: bool,
     fps: int,
 ) -> Dict[str, Any]:
+    policy_name = "llm_static_flower_vla" if llm_mode == "static" else "llm_in_loop_flower_vla"
     CRU.seed_everything(seed)
     env, base_env_state = CRU.load_fresh_env_from_checkpoint(env_ckpt_dict, seed=int(seed), suppress_output=True)
     try:
@@ -280,6 +467,9 @@ def rollout_llm_flower_once(
         first_behavior, first_behavior_step = "none", -1
         behavior_events = []
         command_switches = []
+        selected_static_commands: Dict[int, Dict[str, Any]] = {}
+        active_command: Optional[Dict[str, Any]] = None
+        planner_call_idx = 0
         last_behavior = "other"
         last_command_idx = None
         termination_reason = "horizon"
@@ -289,18 +479,56 @@ def rollout_llm_flower_once(
 
         for step in range(int(horizon)):
             last_step = step
-            command = command_for_step(command_schedule, step)
-            if last_command_idx != command["idx"]:
-                flower_policy.reset(command["instruction"])
-                command_switches.append(
-                    {
-                        "step": int(step),
-                        "command_idx": int(command["idx"]),
-                        "target": command.get("target"),
-                        "instruction": command["instruction"],
-                    }
-                )
-                last_command_idx = int(command["idx"])
+            if llm_mode == "static":
+                if command_schedule is None:
+                    raise ValueError("Static LLM mode requires a command schedule")
+                scheduled_command = command_for_step(command_schedule, step)
+                command_idx = int(scheduled_command["idx"])
+                if command_idx not in selected_static_commands:
+                    selected_static_commands[command_idx] = choose_primitive_command(scheduled_command)
+                command = selected_static_commands[command_idx]
+                if last_command_idx != command_idx:
+                    flower_policy.reset(command["instruction"])
+                    command_switches.append(
+                        {
+                            "step": int(step),
+                            "command_idx": command_idx,
+                            "llm_mode": llm_mode,
+                            "primitive_options": list(command["primitive_options"]),
+                            "selected_primitive": command["selected_primitive"],
+                            "instruction": command["instruction"],
+                        }
+                    )
+                    last_command_idx = command_idx
+            elif llm_mode == "in_loop":
+                if active_command is None or step >= int(active_command["end_step_exclusive"]):
+                    active_command = make_closed_loop_command(
+                        spec=spec,
+                        monitor=monitor,
+                        step=step,
+                        command_idx=planner_call_idx,
+                        budget=command_budget,
+                        horizon=int(horizon),
+                    )
+                    if active_command is None:
+                        termination_reason = "task_complete" if monitor.done else "planner_no_command"
+                        break
+                    planner_call_idx += 1
+                    flower_policy.reset(active_command["instruction"])
+                    command_switches.append(
+                        {
+                            "step": int(step),
+                            "command_idx": int(active_command["idx"]),
+                            "llm_mode": llm_mode,
+                            "history": list(active_command.get("history", [])),
+                            "primitive_options": list(active_command["primitive_options"]),
+                            "selected_primitive": active_command["selected_primitive"],
+                            "instruction": active_command["instruction"],
+                        }
+                    )
+                command = active_command
+            else:
+                raise ValueError(f"Unknown LLM mode: {llm_mode}")
 
             action = np.asarray(flower_policy(obs), dtype=np.float32).copy()
             next_obs, reward, done, _ = env.step(action.copy())
@@ -336,9 +564,12 @@ def rollout_llm_flower_once(
                 {
                     "t": int(step + 1),
                     "mode": spec.mode,
+                    "llm_mode": llm_mode,
                     "command_idx": int(command["idx"]),
-                    "command_target": command.get("target"),
+                    "command_target": command.get("selected_primitive"),
+                    "primitive_options": list(command.get("primitive_options", [])),
                     "instruction": command["instruction"],
+                    "history": list(command.get("history", [])),
                     "current_label": label_now.astype(int).tolist(),
                     "advanced": bool(advanced),
                     "new_events": monitor.events[events_before:],
@@ -349,6 +580,8 @@ def rollout_llm_flower_once(
             if stop_when_complete and monitor.done:
                 termination_reason = "task_complete"
                 break
+            if llm_mode == "in_loop" and advanced:
+                active_command = None
 
             if done and env_done_step < 0:
                 env_done_step = int(step + 1)
@@ -370,16 +603,17 @@ def rollout_llm_flower_once(
         stl_satisfied = bool(liveness_satisfied and (safety_satisfied is not False) and not order_violation)
         behavior = "stl_satisfied" if stl_satisfied else "liveness_satisfied" if liveness_satisfied else first_behavior
         behavior_step = int(target_events[-1]["step"] if target_events else first_behavior_step)
-        instruction_sequence = [item["instruction"] for item in command_schedule]
+        instruction_sequence = [item["instruction"] for item in command_switches]
 
         rollout = {
             "task": spec.name,
             "formula": spec.formula,
-            "policy": "llm_planned_flower_vla",
+            "policy": policy_name,
+            "llm_mode": llm_mode,
             "instruction": " | ".join(instruction_sequence),
             "instruction_sequence": instruction_sequence,
             "llm_plan": llm_plan,
-            "command_schedule": list(command_schedule),
+            "command_schedule": [] if command_schedule is None else list(command_schedule),
             "command_switches": command_switches,
             "scene_config": scene_cfg["name"],
             "seed": int(seed),
@@ -449,10 +683,11 @@ def rollout_llm_flower_once(
                 "task": spec.name,
                 "formula": spec.formula,
                 "seed": int(seed),
-                "policy": "llm_planned_flower_vla",
+                "policy": policy_name,
+                "llm_mode": llm_mode,
                 "instruction_sequence": instruction_sequence,
                 "llm_plan": llm_plan,
-                "command_schedule": list(command_schedule),
+                "command_schedule": [] if command_schedule is None else list(command_schedule),
                 "command_switches": command_switches,
                 "liveness_satisfied": bool(liveness_satisfied),
                 "safety_satisfied": rollout["safety_satisfied"],
@@ -508,19 +743,25 @@ def parse_args() -> argparse.Namespace:
         "--run-for",
         nargs="*",
         default=None,
-        choices=TASK_ORDER,
+        choices=tuple(COMPLEX_STL_SPECS),
         help=(
             "Optional subset of complex STL tasks to run. Omit this flag, or pass it with no values, "
-            f"to run all tasks: {', '.join(TASK_ORDER)}."
+            f"to run the LLM planning tasks: {', '.join(DEFAULT_LLM_TASK_ORDER)}."
         ),
     )
     parser.add_argument("--n-rollouts", "--num-rollouts", type=int, default=10)
     parser.add_argument("--horizon", type=int, default=None, help="Override total horizon per STL task.")
     parser.add_argument(
+        "--llm-mode",
+        choices=("static", "in_loop"),
+        default="static",
+        help="Use a one-shot static LLM plan or replan from high-level history at command boundaries.",
+    )
+    parser.add_argument(
         "--subtask-steps",
         type=int,
         default=None,
-        help="Use a fixed budget for every LLM-generated command. By default the task horizon is split evenly.",
+        help="Use a fixed budget for every LLM primitive command. By default the task horizon is split over the static plan length.",
     )
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--device", default="auto")
@@ -562,7 +803,13 @@ def main() -> None:
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-    tasks = list(args.tasks) if args.tasks else list(TASK_ORDER)
+    tasks = list(args.tasks) if args.tasks else list(DEFAULT_LLM_TASK_ORDER)
+    unsupported = [task for task in tasks if task not in GENERATED_LLM_PLANS]
+    if unsupported:
+        raise ValueError(
+            "The generated LLM planner is registered only for "
+            f"{', '.join(DEFAULT_LLM_TASK_ORDER)}; unsupported requested tasks: {', '.join(unsupported)}"
+        )
     specs = [COMPLEX_STL_SPECS[task] for task in tasks]
     reset_robot_x_min = None if args.disable_reset_pose_filter else args.reset_robot_x_min
     reset_robot_x_max = None if args.disable_reset_pose_filter else args.reset_robot_x_max
@@ -570,8 +817,14 @@ def main() -> None:
     reset_robot_y_max = None if args.disable_reset_pose_filter else args.reset_robot_y_max
     reset_switch_clearance = None if args.disable_reset_pose_filter else args.reset_switch_clearance
 
-    scene_config_arg = args.scene_config or DEFAULT_SCENE_CONFIG
-    scene_config_path = resolve_existing_path(repo_path(scene_config_arg))
+    scene_config_args = {
+        spec.name: (args.scene_config or spec.scene_config or DEFAULT_SCENE_CONFIG)
+        for spec in specs
+    }
+    scene_config_paths = {
+        spec.name: resolve_existing_path(repo_path(scene_config_args[spec.name]))
+        for spec in specs
+    }
     visualization_config = resolve_existing_path(repo_path(args.visualization_config))
     flower_checkpoint = resolve_existing_path(args.flower_checkpoint)
     env_checkpoint = resolve_existing_path(args.env_checkpoint)
@@ -599,7 +852,8 @@ def main() -> None:
             margin=SafetyBox().margin,
         )
     gripper_spec = GripperOpenSpec(min_width=float(args.gripper_min_width), margin=float(args.gripper_margin))
-    run_name = args.name or f"llm_flower_complex_stls_rollouts{args.n_rollouts}_{time.strftime('%Y%m%d_%H%M%S')}"
+    policy_name = "llm_static_flower_vla" if args.llm_mode == "static" else "llm_in_loop_flower_vla"
+    run_name = args.name or f"{args.llm_mode}_llm_flower_complex_stls_rollouts{args.n_rollouts}_{time.strftime('%Y%m%d_%H%M%S')}"
     run_dir = Path(args.output_root).expanduser()
     if not run_dir.is_absolute():
         run_dir = REPO_ROOT / run_dir
@@ -608,28 +862,37 @@ def main() -> None:
     plans = {}
     for spec in specs:
         task_horizon = int(args.horizon if args.horizon is not None else spec.default_horizon)
-        plan = plan_for_spec(spec)
-        plan["command_schedule"] = make_command_schedule(plan, task_horizon, args.subtask_steps)
-        plan["horizon"] = int(plan["command_schedule"][-1]["end_step_exclusive"])
+        plan = plan_for_spec(spec, args.llm_mode)
+        command_budget = default_command_budget(spec, task_horizon, args.subtask_steps)
+        plan["command_budget"] = int(command_budget)
+        if args.llm_mode == "static":
+            plan["command_schedule"] = make_command_schedule(plan, task_horizon, args.subtask_steps)
+            plan["horizon"] = int(plan["command_schedule"][-1]["end_step_exclusive"])
+        else:
+            plan["command_schedule"] = []
+            plan["horizon"] = int(task_horizon)
         plans[spec.name] = plan
 
     planned = {
-        "policy": "llm_planned_flower_vla",
-        "planner": "static_llm_decomposition_by_codex",
+        "policy": policy_name,
+        "llm_mode": args.llm_mode,
+        "planner": "static_llm_decomposition_by_codex" if args.llm_mode == "static" else "history_conditioned_llm_decomposition_by_codex",
         "fairness_note": (
-            "The LLM plan is fixed before rollout. Command switches are time-budgeted, "
-            "not triggered by proposition labels or oracle task success."
+            "The LLM only emits executable VLA primitives. OR steps are represented as primitive option sets "
+            "and sampled uniformly. Safety terms are not translated into extra commands or controller logic."
         ),
         "primitive_grounding": LLM_PRIMITIVE_GROUNDING,
+        "primitive_aliases": LLM_PRIMITIVE_ALIASES,
         "flower_root": str(Path(args.flower_root).expanduser()),
         "flower_checkpoint": str(flower_checkpoint),
         "env_checkpoint": str(env_checkpoint),
-        "scene_config": str(scene_config_path),
+        "scene_config": "override" if args.scene_config is not None else "per_task",
+        "scene_configs": {spec.name: str(scene_config_paths[spec.name]) for spec in specs},
         "visualization_config": str(visualization_config),
         "output_dir": str(run_dir),
         "requested_name": args.name,
         "run_name": run_dir.name,
-        "scene_config_arg": str(scene_config_arg),
+        "scene_config_arg": None if args.scene_config is None else str(args.scene_config),
         "tasks": tasks,
         "llm_plans": plans,
         "task_specs": [
@@ -640,8 +903,10 @@ def main() -> None:
                 "target_names": list(spec.target_names),
                 "stage_target_names": [list(stage) for stage in spec.stage_target_names],
                 "safety_kind": spec.safety_kind,
+                "scene_config": str(scene_config_paths[spec.name]),
                 "horizon": int(plans[spec.name]["horizon"]),
-                "command_count": len(plans[spec.name]["commands"]),
+                "static_step_count": len(plans[spec.name]["static_steps"]),
+                "command_budget": int(plans[spec.name]["command_budget"]),
             }
             for spec in specs
         ],
@@ -654,6 +919,10 @@ def main() -> None:
         "settle_gripper": float(args.settle_gripper),
         "safety_box": asdict(safety_box.normalized()),
         "gripper_spec": asdict(gripper_spec.normalized()),
+        "generated_llm_plans": {
+            name: canonicalized_generated_plan(name)
+            for name in DEFAULT_LLM_TASK_ORDER
+        },
         "subtask_steps": None if args.subtask_steps is None else int(args.subtask_steps),
         "save_video": not args.no_video,
         "stop_when_complete": not args.dont_stop_when_complete,
@@ -681,7 +950,9 @@ def main() -> None:
     for spec in specs:
         plan = plans[spec.name]
         task_horizon = int(plan["horizon"])
-        command_schedule = plan["command_schedule"]
+        task_scene_config_path = scene_config_paths[spec.name]
+        command_schedule = plan["command_schedule"] if args.llm_mode == "static" else None
+        command_budget = int(plan["command_budget"])
         task_dir = run_dir / spec.name
         task_dir.mkdir(parents=True, exist_ok=True)
         write_json(
@@ -693,18 +964,24 @@ def main() -> None:
                 "target_names": list(spec.target_names),
                 "stage_target_names": [list(stage) for stage in spec.stage_target_names],
                 "safety_kind": spec.safety_kind,
+                "scene_config": str(task_scene_config_path),
                 "horizon": task_horizon,
+                "llm_mode": args.llm_mode,
+                "command_budget": command_budget,
                 "llm_plan": plan,
             },
         )
-        write_json(task_dir / "scene_config_resolved.json", load_json(scene_config_path))
+        write_json(task_dir / "scene_config_resolved.json", load_json(task_scene_config_path))
 
-        print(f"\nTask {spec.name}:")
-        for command in command_schedule:
-            print(
-                f"  command {command['idx']}: steps {command['start_step']}..{command['end_step_exclusive'] - 1} "
-                f"target={command.get('target')} instruction={command['instruction']!r}"
-            )
+        print(f"\nTask {spec.name} ({args.llm_mode}):")
+        if args.llm_mode == "static":
+            for command in command_schedule or []:
+                print(
+                    f"  command {command['idx']}: steps {command['start_step']}..{command['end_step_exclusive'] - 1} "
+                    f"options={command['primitive_options']}"
+                )
+        else:
+            print(f"  replans every {command_budget} steps or when a high-level event is observed")
 
         rollouts = []
         for rollout_idx in range(int(args.n_rollouts)):
@@ -716,8 +993,10 @@ def main() -> None:
                 flower_policy=flower_policy,
                 spec=spec,
                 llm_plan=plan,
+                llm_mode=args.llm_mode,
                 command_schedule=command_schedule,
-                scene_config_path=scene_config_path,
+                command_budget=command_budget,
+                scene_config_path=task_scene_config_path,
                 reset_poses=reset_poses or [],
                 reset_pose_filter=reset_pose_filter,
                 fixed_reset_pose_index=fixed_reset_pose_index,
@@ -745,8 +1024,10 @@ def main() -> None:
 
         summary = task_summary(spec, rollouts, n_candidates=0, horizon=task_horizon)
         summary["llm_plan"] = plan
-        summary["instruction_sequence"] = [command["instruction"] for command in command_schedule]
-        summary["command_count"] = len(command_schedule)
+        summary["llm_mode"] = args.llm_mode
+        summary["static_steps"] = plan["static_steps"]
+        summary["command_budget"] = command_budget
+        summary["command_count"] = len(command_schedule or [])
         write_json(task_dir / "task_summary.json", summary)
         if rollouts:
             CRU.plot_rollout_xy(

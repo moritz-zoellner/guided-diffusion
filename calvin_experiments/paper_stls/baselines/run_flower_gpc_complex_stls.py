@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Run FLOWER VLA on the complex CALVIN paper-STL tasks.
+"""Run FLOWER+GPC on the complex CALVIN safety tasks.
 
-This mirrors `calvin_experiments/run_complex_stl_automaton.py`, but executes a
-single language-conditioned FLOWER policy command for each STL task.
+FLOWER proposes multiple stochastic action chunks in parallel from the same
+language-conditioned observation.  A dynamics world model rolls out those
+chunks, evaluates the safety robustness term, and the controller executes the
+best chunk.  This is a safety-only baseline: the VLA language prompt still
+contains the task/liveness request, while GPC only ranks candidates by predicted
+safety robustness.
 """
 
 from __future__ import annotations
@@ -10,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
 import sys
 import time
 from dataclasses import asdict
@@ -29,7 +32,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 FLOWER_ROOT = REPO_ROOT / "flower_vla_calvin"
 DEFAULT_FLOWER_CHECKPOINT = REPO_ROOT / "outputs/calvin/baselines/flower/flower_calvin_d"
 DEFAULT_ENV_CHECKPOINT = REPO_ROOT / "outputs/calvin/base_policy/calvin_D_base_dp/20260501015147/models/model_epoch_280.pth"
-DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs/calvin_paper/complex-behaviors/baselines/flower"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "outputs/calvin_paper/complex-behaviors/baselines/flower_gpc"
+SAFETY_TASK_ORDER = ("region", "angle", "gripper")
 
 for path in [
     REPO_ROOT,
@@ -55,10 +59,10 @@ from calvin_experiments.complex_stl_experiment_utils import (
     DEFAULT_COMPLEX_RESET_ROBOT_Y_MIN,
     DEFAULT_RESET_POSE_FILES,
     DEFAULT_SCENE_CONFIG,
+    GRIPPER_WIDTH_RAW_ROBOT_IDX,
     GripperOpenSpec,
     SafetyBox,
     SpecMonitor,
-    TASK_ORDER,
     evaluate_safety,
     evaluate_subgoals,
     filter_complex_reset_poses,
@@ -68,6 +72,7 @@ from calvin_experiments.complex_stl_experiment_utils import (
     make_fixed_scene_robot,
     randomized_safety_context_for_rollout,
     resolve_reset_pose_paths,
+    rollout_summary_payload,
     rzz_from_euler_xyz_np,
     rzz_to_tilt_angle_deg_np,
     save_rollout_diagnostics,
@@ -78,6 +83,11 @@ from calvin_experiments.complex_stl_experiment_utils import (
     write_rollout_rzz_angle_diagnostic_plot,
     write_rzz_angle_diagnostic_plot,
     write_summary_tables,
+)
+from calvin_experiments.run_complex_stl_automaton import (
+    DEFAULT_DYNAMICS_CKPT,
+    DynamicsRefiner,
+    apply_rzz_action_warmup,
 )
 from calvin_experiments.run_dynaguide_articulated_automaton import (
     DEFAULT_RESET_SWITCH_CLEARANCE,
@@ -92,15 +102,146 @@ from calvin_experiments.run_dynaguide_articulated_automaton import (
     settle_metrics,
     write_json,
 )
-from calvin_experiments.run_complex_stl_automaton import apply_rzz_action_warmup
 from flower_our_env_rollout import FlowerPolicyAdapter, load_flower_model, resolve_device
 
 
-def rollout_flower_once(
+def json_ready(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_ready(item) for item in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    return value
+
+
+class FlowerCandidateAdapter(FlowerPolicyAdapter):
+    """FLOWER adapter with batched stochastic action-chunk sampling."""
+
+    def sample_action_chunks(
+        self,
+        obs,
+        *,
+        instruction: str,
+        n_candidates: int,
+        chunk_horizon: Optional[int] = None,
+    ) -> np.ndarray:
+        import torch
+
+        flower_obs = self.observation_to_flower(obs)
+        n_candidates = int(n_candidates)
+        if n_candidates <= 0:
+            raise ValueError(f"n_candidates must be positive, got {n_candidates}")
+        rgb_static = flower_obs["rgb_obs"]["rgb_static"].repeat(n_candidates, 1, 1, 1, 1)
+        rgb_gripper = flower_obs["rgb_obs"]["rgb_gripper"].repeat(n_candidates, 1, 1, 1, 1)
+        batch = {
+            "rgb_obs": {
+                "rgb_static": rgb_static,
+                "rgb_gripper": rgb_gripper,
+            },
+            "lang_text": [instruction] * n_candidates,
+        }
+        with torch.no_grad():
+            features = self.model.encode_observations(batch)
+            noise = torch.randn(
+                n_candidates,
+                self.model.act_window_size,
+                self.model.action_dim,
+                device=features["features"].device,
+            )
+            chunks = self.model.sample_actions(noise, features, inference=True)
+        chunks_np = chunks.detach().cpu().numpy().astype(np.float32)
+        horizon = self.model.act_window_size if chunk_horizon is None else int(chunk_horizon)
+        horizon = max(1, min(int(horizon), int(chunks_np.shape[1])))
+        chunks_np = chunks_np[:, :horizon, :]
+        chunks_np[..., -1] = np.where(chunks_np[..., -1] > 0.0, 1.0, -1.0)
+        return np.clip(chunks_np, -1.0, 1.0).astype(np.float32)
+
+
+def score_safety_candidates(
+    *,
+    dynamics_refiner: DynamicsRefiner,
+    spec,
+    robot: Sequence[float],
+    scene: Sequence[float],
+    candidate_chunks: np.ndarray,
+    safety_box: SafetyBox,
+    gripper_spec: GripperOpenSpec,
+    smooth_min_tau: float,
+) -> tuple[int, Dict[str, Any]]:
+    import torch
+
+    state_dyn = dynamics_refiner.raw_env_state_to_dynamics_state_torch(robot, scene)
+    action_t = torch.as_tensor(candidate_chunks, device=dynamics_refiner.device, dtype=torch.float32)
+    with torch.no_grad():
+        if spec.safety_kind == "eef_avoid_box":
+            scores, pred_xy, signed_dist = dynamics_refiner.safety_robustness(
+                state_dyn,
+                action_t,
+                safety_box,
+                smooth_min_tau,
+            )
+            score_record = {
+                "score_kind": "eef_avoid_box_smooth_min_signed_distance",
+                "candidate_scores": scores.detach().cpu().numpy().astype(float).tolist(),
+                "candidate_min_signed_distance": signed_dist.min(dim=1).values.detach().cpu().numpy().astype(float).tolist(),
+                "candidate_mean_signed_distance": signed_dist.mean(dim=1).detach().cpu().numpy().astype(float).tolist(),
+                "selected_pred_xy": None,
+            }
+        elif spec.safety_kind == "gripper_open":
+            scores, width = dynamics_refiner.gripper_open_robustness(
+                state_dyn,
+                action_t,
+                gripper_spec,
+                smooth_min_tau,
+            )
+            score_record = {
+                "score_kind": "gripper_open_smooth_min_width_margin",
+                "candidate_scores": scores.detach().cpu().numpy().astype(float).tolist(),
+                "candidate_min_gripper_width": width.min(dim=1).values.detach().cpu().numpy().astype(float).tolist(),
+                "candidate_mean_gripper_width": width.mean(dim=1).detach().cpu().numpy().astype(float).tolist(),
+            }
+        elif spec.safety_kind in {"tcp_rzz_30deg", "tcp_rzz_angle"}:
+            scores, pred_rzz, abs_error, mse = dynamics_refiner.rzz_robustness(
+                state_dyn,
+                action_t,
+                spec.rzz_spec,
+            )
+            score_record = {
+                "score_kind": "tcp_rzz_angle_smooth_min_margin",
+                "target_rzz": float(spec.rzz_spec.target),
+                "target_angle_deg": float(spec.rzz_spec.angle_deg),
+                "tolerance_deg": None if spec.rzz_spec.tolerance_deg is None else float(spec.rzz_spec.tolerance_deg),
+                "tolerance_rzz": float(spec.rzz_spec.tolerance),
+                "candidate_scores": scores.detach().cpu().numpy().astype(float).tolist(),
+                "candidate_max_abs_rzz_error": abs_error.max(dim=1).values.detach().cpu().numpy().astype(float).tolist(),
+                "candidate_mean_abs_rzz_error": abs_error.mean(dim=1).detach().cpu().numpy().astype(float).tolist(),
+                "candidate_mse": mse.detach().cpu().numpy().astype(float).tolist(),
+            }
+        else:
+            raise ValueError(f"FLOWER+GPC is safety-only; unsupported safety kind {spec.safety_kind!r}")
+    selected_idx = int(torch.argmax(scores).detach().cpu())
+    score_record.update(
+        {
+            "selected_idx": selected_idx,
+            "selected_score": float(scores[selected_idx].detach().cpu()),
+            "n_candidates": int(candidate_chunks.shape[0]),
+            "chunk_horizon": int(candidate_chunks.shape[1]),
+        }
+    )
+    return selected_idx, score_record
+
+
+def rollout_flower_gpc_once(
     *,
     seed: int,
     env_ckpt_dict: Dict[str, Any],
-    flower_policy: FlowerPolicyAdapter,
+    flower_policy: FlowerCandidateAdapter,
+    dynamics_refiner: DynamicsRefiner,
     spec,
     instruction: str,
     scene_config_path: Path,
@@ -110,6 +251,8 @@ def rollout_flower_once(
     output_dir: Path,
     rollout_tag: str,
     horizon: int,
+    n_candidates: int,
+    chunk_horizon: int,
     video_cfg: Dict[str, Any],
     safety_box: SafetyBox,
     gripper_spec: GripperOpenSpec,
@@ -184,6 +327,7 @@ def rollout_flower_once(
         eef_xy = [robot_states[-1][:2].copy()]
         tcp_rzz = [reset_rzz]
         tcp_tilt_angle_deg = [reset_tcp_tilt_angle_deg]
+        action_queue: list[np.ndarray] = []
         first_behavior, first_behavior_step = "none", -1
         behavior_events = []
         last_behavior = "other"
@@ -194,8 +338,39 @@ def rollout_flower_once(
 
         for step in range(int(horizon)):
             last_step = step
-            action = np.asarray(flower_policy(obs), dtype=np.float32).copy()
-            next_obs, reward, done, _ = env.step(action.copy())
+            if not action_queue:
+                state_for_score = env.get_state()
+                candidate_chunks = flower_policy.sample_action_chunks(
+                    obs,
+                    instruction=instruction,
+                    n_candidates=int(n_candidates),
+                    chunk_horizon=int(chunk_horizon),
+                )
+                selected_idx, score_record = score_safety_candidates(
+                    dynamics_refiner=dynamics_refiner,
+                    spec=spec,
+                    robot=state_for_score["robot"],
+                    scene=state_for_score["scene"],
+                    candidate_chunks=candidate_chunks,
+                    safety_box=safety_box,
+                    gripper_spec=gripper_spec,
+                    smooth_min_tau=float(spec.smooth_min_tau or 0.02),
+                )
+                selected_chunk = np.asarray(candidate_chunks[selected_idx], dtype=np.float32)
+                action_queue.extend(selected_chunk)
+                records.append(
+                    {
+                        "t": int(step),
+                        "mode": "flower_gpc_safety_rank",
+                        "instruction": instruction,
+                        "safety_kind": spec.safety_kind,
+                        "current_label": labels_over_time[-1].astype(int).tolist(),
+                        **score_record,
+                    }
+                )
+
+            action = np.asarray(action_queue.pop(0), dtype=np.float32).copy()
+            next_obs, reward, done, _ = env.step(action)
             total_reward += float(reward)
 
             state_now = env.get_state()
@@ -227,17 +402,17 @@ def rollout_flower_once(
 
             events_before = len(monitor.events)
             advanced = monitor.sync(label_now, step + 1)
-            records.append(
-                {
-                    "t": int(step + 1),
-                    "mode": spec.mode,
-                    "current_label": label_now.astype(int).tolist(),
-                    "advanced": bool(advanced),
-                    "new_events": monitor.events[events_before:],
-                    "done": bool(monitor.done),
-                    "violations": list(monitor.violations),
-                }
-            )
+            if advanced:
+                action_queue.clear()
+                records.append(
+                    {
+                        "t": int(step + 1),
+                        "mode": "monitor_event",
+                        "advanced": True,
+                        "new_events": monitor.events[events_before:],
+                        "done": bool(monitor.done),
+                    }
+                )
             if stop_when_complete and monitor.done:
                 termination_reason = "task_complete"
                 break
@@ -266,9 +441,10 @@ def rollout_flower_once(
         rollout = {
             "task": spec.name,
             "formula": spec.formula,
-            "policy": "flower_vla",
+            "policy": "flower_gpc_vla",
             "instruction": instruction,
             "scene_config": scene_cfg["name"],
+            "scene_config_path": str(scene_config_path),
             "seed": int(seed),
             "behavior": behavior,
             "first_behavior": first_behavior,
@@ -287,7 +463,7 @@ def rollout_flower_once(
             "eef_xy": eef_xy_np,
             "tcp_rzz": np.asarray(tcp_rzz, dtype=np.float32),
             "tcp_tilt_angle_deg": np.asarray(tcp_tilt_angle_deg, dtype=np.float32),
-            "gripper_width": robot_states_np[:, 6].astype(np.float32),
+            "gripper_width": robot_states_np[:, GRIPPER_WIDTH_RAW_ROBOT_IDX].astype(np.float32),
             "labels_over_time": np.asarray(labels_over_time, dtype=np.int32),
             "initial_label": labels_over_time[0].astype(int).tolist(),
             "final_label": labels_over_time[-1].astype(int).tolist(),
@@ -325,6 +501,8 @@ def rollout_flower_once(
             "settle_rewards": settle_rewards,
             "settle_dones": settle_dones,
             "settle_metrics": settle_metrics(settle_scene_states),
+            "n_candidates": int(n_candidates),
+            "gpc_chunk_horizon": int(chunk_horizon),
         }
         if save_video:
             CRU.save_rollout_artifacts(rollout, frames, output_dir, rollout_tag, video_cfg, fps=fps)
@@ -336,57 +514,12 @@ def rollout_flower_once(
         CRU.plot_rollout_xy(
             [rollout],
             rollout["scene_snapshot"],
-            f"FLOWER {spec.name} seed {seed} | stl={stl_satisfied} subgoals={completed_subgoals}/{total_subgoals}",
+            f"FLOWER+GPC {spec.name} seed {seed} | stl={stl_satisfied} subgoals={completed_subgoals}/{total_subgoals}",
             save_path=rollout_dir / "rollout_xy.png",
             display_inline=False,
         )
-        write_json(rollout_dir / "records.json", {"records": records})
-        write_json(
-            rollout_dir / "rollout_summary.json",
-            {
-                "task": spec.name,
-                "formula": spec.formula,
-                "seed": int(seed),
-                "policy": "flower_vla",
-                "instruction": instruction,
-                "liveness_satisfied": bool(liveness_satisfied),
-                "safety_satisfied": rollout["safety_satisfied"],
-                "stl_satisfied": bool(stl_satisfied),
-                "success": bool(stl_satisfied),
-                "subgoal_completion_rate": float(subgoal_rate),
-                "completed_subgoals": int(completed_subgoals),
-                "total_subgoals": int(total_subgoals),
-                "target_events": target_events,
-                "order_violation": order_violation,
-                "order_violations": order_violations,
-                "safety_kind": spec.safety_kind,
-                "safety_metrics": safety_metrics,
-                "behavior": behavior,
-                "first_behavior": first_behavior,
-                "first_behavior_step": int(first_behavior_step),
-                "behavior_step": behavior_step,
-                "termination_step": rollout["termination_step"],
-                "termination_reason": termination_reason,
-                "env_done_step": int(env_done_step),
-                "initial_label": rollout["initial_label"],
-                "final_label": rollout["final_label"],
-                "video": None if rollout.get("video") is None else str(rollout["video"]),
-                "trace": str(rollout["trace"]),
-                "diagnostics": str(rollout["diagnostics"]),
-                "topdown_plot": str(rollout_dir / "rollout_xy.png"),
-                "reset_robot_from_pose_file": bool(robot_from_pose_file),
-                "fixed_reset_pose_index": None if fixed_reset_pose_index is None else int(fixed_reset_pose_index),
-                "reset_pose_filter": reset_pose_filter,
-                "reset_rzz": reset_rzz,
-                "reset_tcp_tilt_angle_deg": reset_tcp_tilt_angle_deg,
-                "rzz_warmup": rzz_warmup,
-                "settle_steps": rollout["settle_steps"],
-                "settle_action": rollout["settle_action"],
-                "pre_settle_label": rollout["pre_settle_label"],
-                "settle_metrics": rollout["settle_metrics"],
-                "records": records,
-            },
-        )
+        write_json(rollout_dir / "records.json", {"records": json_ready(records)})
+        write_json(rollout_dir / "rollout_summary.json", json_ready(rollout_summary_payload(rollout)))
         return rollout
     finally:
         CRU.close_env_quietly(env)
@@ -397,6 +530,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--flower-root", type=Path, default=FLOWER_ROOT)
     parser.add_argument("--flower-checkpoint", type=Path, default=DEFAULT_FLOWER_CHECKPOINT)
     parser.add_argument("--env-checkpoint", type=Path, default=DEFAULT_ENV_CHECKPOINT)
+    parser.add_argument("--dynamics-ckpt", type=Path, default=DEFAULT_DYNAMICS_CKPT)
     parser.add_argument("--scene-config", type=Path, default=None)
     parser.add_argument("--visualization-config", type=Path, default=DEFAULT_VISUALIZATION_CONFIG)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
@@ -407,35 +541,21 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=None,
         choices=tuple(COMPLEX_STL_SPECS),
-        help=(
-            "Optional subset of complex STL tasks to run. Omit this flag, or pass it with no values, "
-            f"to run all tasks: {', '.join(TASK_ORDER)}."
-        ),
+        help=f"Safety task subset. Omit for: {', '.join(SAFETY_TASK_ORDER)}.",
     )
     parser.add_argument("--n-rollouts", "--num-rollouts", type=int, default=10)
+    parser.add_argument("--n-candidates", type=int, default=16)
+    parser.add_argument("--chunk-horizon", type=int, default=10)
     parser.add_argument("--horizon", type=int, default=None)
-    parser.add_argument("--angle-goal-deg", type=float, default=None, help="Override the angle safety task target in degrees.")
+    parser.add_argument("--angle-goal-deg", type=float, default=None)
     parser.add_argument("--angle-random-range-deg", type=float, nargs=2, default=None, metavar=("MIN", "MAX"))
     parser.add_argument("--angle-tolerance-deg", type=float, default=None)
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--reset-pose-files", type=Path, nargs="*", default=list(DEFAULT_RESET_POSE_FILES))
-    parser.add_argument(
-        "--fixed-reset-pose-index",
-        type=int,
-        default=None,
-        help="Use one deterministic robot reset pose from the filtered pose pool. By default, each rollout samples from the constrained pool.",
-    )
-    parser.add_argument(
-        "--sample-reset-poses",
-        action="store_true",
-        help="Sample a reset pose from the filtered pool for each rollout seed. This is now the default.",
-    )
-    parser.add_argument(
-        "--use-scene-config-robot",
-        action="store_true",
-        help="Use the robot pose from the scene config instead of sampling from the reset-pose pool.",
-    )
+    parser.add_argument("--fixed-reset-pose-index", type=int, default=None)
+    parser.add_argument("--sample-reset-poses", action="store_true")
+    parser.add_argument("--use-scene-config-robot", action="store_true")
     parser.add_argument("--settle-steps", type=int, default=DEFAULT_SETTLE_STEPS)
     parser.add_argument("--settle-gripper", type=float, default=DEFAULT_SETTLE_GRIPPER)
     parser.add_argument("--reset-robot-x-min", type=float, default=DEFAULT_COMPLEX_RESET_ROBOT_X_MIN)
@@ -444,15 +564,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reset-robot-y-max", type=float, default=DEFAULT_COMPLEX_RESET_ROBOT_Y_MAX)
     parser.add_argument("--reset-switch-clearance", type=float, default=DEFAULT_RESET_SWITCH_CLEARANCE)
     parser.add_argument("--disable-reset-pose-filter", action="store_true")
-    parser.add_argument("--disable-safety-randomization", action="store_true")
     parser.add_argument("--safety-box", type=float, nargs=4, default=None, metavar=("X_MIN", "X_MAX", "Y_MIN", "Y_MAX"))
+    parser.add_argument("--disable-safety-randomization", action="store_true")
     parser.add_argument("--gripper-min-width", type=float, default=0.06)
     parser.add_argument("--gripper-margin", type=float, default=0.02)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--no-video", action="store_true")
     parser.add_argument("--stop-on-env-done", action="store_true")
     parser.add_argument("--dont-stop-when-complete", action="store_true")
-    parser.add_argument("--online", action="store_true", help="Allow Hugging Face downloads/checks instead of cache-only mode.")
+    parser.add_argument("--online", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -466,8 +586,12 @@ def main() -> None:
     spec_by_name = dict(COMPLEX_STL_SPECS)
     if args.angle_goal_deg is not None:
         spec_by_name["angle"] = make_angle_stl_spec(float(args.angle_goal_deg))
-    tasks = list(args.tasks) if args.tasks else list(TASK_ORDER)
+    tasks = list(args.tasks) if args.tasks else list(SAFETY_TASK_ORDER)
+    unsupported = [task for task in tasks if spec_by_name[task].category != "safety"]
+    if unsupported:
+        raise ValueError(f"FLOWER+GPC is safety-only; unsupported non-safety tasks: {', '.join(unsupported)}")
     specs = [spec_by_name[task] for task in tasks]
+
     reset_robot_x_min = None if args.disable_reset_pose_filter else args.reset_robot_x_min
     reset_robot_x_max = None if args.disable_reset_pose_filter else args.reset_robot_x_max
     reset_robot_y_min = None if args.disable_reset_pose_filter else args.reset_robot_y_min
@@ -485,6 +609,8 @@ def main() -> None:
     visualization_config = resolve_existing_path(repo_path(args.visualization_config))
     flower_checkpoint = resolve_existing_path(args.flower_checkpoint)
     env_checkpoint = resolve_existing_path(args.env_checkpoint)
+    dynamics_checkpoint = resolve_existing_path(repo_path(args.dynamics_ckpt))
+
     if args.use_scene_config_robot:
         reset_poses = []
         reset_pose_filter = {
@@ -520,25 +646,30 @@ def main() -> None:
             margin=SafetyBox().margin,
         )
     gripper_spec = GripperOpenSpec(min_width=float(args.gripper_min_width), margin=float(args.gripper_margin))
-    run_name = args.name or f"flower_complex_stls_rollouts{args.n_rollouts}_{time.strftime('%Y%m%d_%H%M%S')}"
+
+    run_name = args.name or f"flower_gpc_safety_N{args.n_rollouts}_candidates{args.n_candidates}_{time.strftime('%Y%m%d_%H%M%S')}"
     run_dir = Path(args.output_root).expanduser()
     if not run_dir.is_absolute():
         run_dir = REPO_ROOT / run_dir
     run_dir = unique_run_dir(run_dir, run_name)
 
     planned = {
-        "policy": "flower_vla",
+        "policy": "flower_gpc_vla",
+        "tasks": tasks,
         "flower_root": str(Path(args.flower_root).expanduser()),
         "flower_checkpoint": str(flower_checkpoint),
         "env_checkpoint": str(env_checkpoint),
+        "dynamics_checkpoint": str(dynamics_checkpoint),
         "scene_config": "override" if args.scene_config is not None else "per_task",
         "scene_configs": {spec.name: str(scene_config_paths[spec.name]) for spec in specs},
         "visualization_config": str(visualization_config),
         "output_dir": str(run_dir),
         "requested_name": args.name,
         "run_name": run_dir.name,
-        "scene_config_arg": None if args.scene_config is None else str(args.scene_config),
-        "tasks": tasks,
+        "n_rollouts": int(args.n_rollouts),
+        "n_candidates": int(args.n_candidates),
+        "chunk_horizon": int(args.chunk_horizon),
+        "seed_start": int(args.seed_start),
         "angle_goal_deg_override": None if args.angle_goal_deg is None else float(args.angle_goal_deg),
         "instructions": {spec.name: spec.prompt for spec in specs},
         "task_specs": [
@@ -548,15 +679,10 @@ def main() -> None:
                 "category": spec.category,
                 "formula": spec.formula,
                 "target_names": list(spec.target_names),
-                "stage_target_names": [list(stage) for stage in spec.stage_target_names],
-                "first_option_names": list(spec.first_option_names),
-                "middle_target_name": spec.middle_target_name,
-                "cycle_target_names": list(spec.cycle_target_names),
                 "safety_kind": spec.safety_kind,
                 "scene_config": str(scene_config_paths[spec.name]),
                 "horizon": int(args.horizon if args.horizon is not None else spec.default_horizon),
-                "target_timeout_steps": int(spec.target_timeout_steps),
-                "max_target_events": int(spec.max_target_events),
+                "smooth_min_tau": spec.smooth_min_tau,
                 "rzz_spec": asdict(spec.rzz_spec),
                 "rzz_init_mode": spec.rzz_init_mode,
                 "rzz_warmup_max_steps": int(spec.rzz_warmup_max_steps),
@@ -566,8 +692,6 @@ def main() -> None:
             }
             for spec in specs
         ],
-        "n_rollouts": int(args.n_rollouts),
-        "seed_start": int(args.seed_start),
         "use_scene_config_robot": bool(args.use_scene_config_robot),
         "reset_pose_filter": reset_pose_filter,
         "reset_pose_selection": (
@@ -578,33 +702,38 @@ def main() -> None:
         "fixed_reset_pose_index": fixed_reset_pose_index,
         "settle_steps": int(args.settle_steps),
         "settle_gripper": float(args.settle_gripper),
+        "safety_box": asdict(safety_box.normalized()),
         "safety_randomization": safety_randomization_plan(
             safety_box,
             enabled=not bool(args.disable_safety_randomization),
             rzz_angle_deg_range=args.angle_random_range_deg,
             rzz_tolerance_deg=args.angle_tolerance_deg,
         ),
-        "safety_box": asdict(safety_box.normalized()),
         "gripper_spec": asdict(gripper_spec.normalized()),
         "save_video": not args.no_video,
         "stop_when_complete": not args.dont_stop_when_complete,
         "stop_on_env_done": bool(args.stop_on_env_done),
+        "implementation_note": (
+            "FLOWER candidate chunks are sampled in one batched diffusion call by repeating the observation "
+            "and language instruction n_candidates times."
+        ),
     }
     if args.dry_run:
-        print(json.dumps(planned, indent=2))
+        print(json.dumps(json_ready(planned), indent=2))
         return
 
     video_cfg = load_json(visualization_config)
     device = resolve_device(args.device)
     env_ckpt_dict = FileUtils.maybe_dict_from_checkpoint(ckpt_path=str(env_checkpoint))
     flower_model = load_flower_model(flower_checkpoint, device)
-    flower_policy = FlowerPolicyAdapter(flower_model, device=device)
+    flower_policy = FlowerCandidateAdapter(flower_model, device=device)
+    dynamics_refiner = DynamicsRefiner(dynamics_checkpoint, device)
 
     run_dir.mkdir(parents=True, exist_ok=False)
-    write_json(run_dir / "run_args.json", planned)
+    write_json(run_dir / "run_args.json", json_ready(planned))
     print("device:", device)
     print("flower checkpoint:", flower_checkpoint)
-    print("env checkpoint:", env_checkpoint)
+    print("dynamics:", dynamics_refiner.meta["checkpoint_path"])
     print("output:", run_dir)
 
     all_task_summaries = []
@@ -615,38 +744,36 @@ def main() -> None:
         task_dir.mkdir(parents=True, exist_ok=True)
         write_json(
             task_dir / "task_spec.json",
-            {
-                "name": spec.name,
-                "mode": spec.mode,
-                "category": spec.category,
-                "formula": spec.formula,
-                "target_names": list(spec.target_names),
-                "stage_target_names": [list(stage) for stage in spec.stage_target_names],
-                "first_option_names": list(spec.first_option_names),
-                "middle_target_name": spec.middle_target_name,
-                "cycle_target_names": list(spec.cycle_target_names),
-                "safety_kind": spec.safety_kind,
-                "scene_config": str(task_scene_config_path),
-                "horizon": task_horizon,
-                "target_timeout_steps": int(spec.target_timeout_steps),
-                "max_target_events": int(spec.max_target_events),
-                "rzz_spec": asdict(spec.rzz_spec),
-                "rzz_init_mode": spec.rzz_init_mode,
-                "rzz_warmup_max_steps": int(spec.rzz_warmup_max_steps),
-                "rzz_warmup_tolerance": spec.rzz_warmup_tolerance,
-                "restack_after_warmup": bool(spec.restack_after_warmup),
-                "safety_randomization": safety_randomization_plan(
-                    safety_box,
-                    enabled=not bool(args.disable_safety_randomization),
-                    rzz_angle_deg_range=args.angle_random_range_deg,
-                    rzz_tolerance_deg=args.angle_tolerance_deg,
-                ),
-                "instruction": spec.prompt,
-            },
+            json_ready(
+                {
+                    "name": spec.name,
+                    "mode": spec.mode,
+                    "category": spec.category,
+                    "formula": spec.formula,
+                    "target_names": list(spec.target_names),
+                    "safety_kind": spec.safety_kind,
+                    "scene_config": str(task_scene_config_path),
+                    "horizon": task_horizon,
+                    "n_candidates": int(args.n_candidates),
+                    "chunk_horizon": int(args.chunk_horizon),
+                    "rzz_spec": asdict(spec.rzz_spec),
+                    "rzz_init_mode": spec.rzz_init_mode,
+                    "rzz_warmup_max_steps": int(spec.rzz_warmup_max_steps),
+                    "rzz_warmup_tolerance": spec.rzz_warmup_tolerance,
+                    "restack_after_warmup": bool(spec.restack_after_warmup),
+                    "safety_randomization": safety_randomization_plan(
+                        safety_box,
+                        enabled=not bool(args.disable_safety_randomization),
+                        rzz_angle_deg_range=args.angle_random_range_deg,
+                        rzz_tolerance_deg=args.angle_tolerance_deg,
+                    ),
+                    "prompt": spec.prompt,
+                }
+            ),
         )
         write_json(task_dir / "scene_config_resolved.json", load_json(task_scene_config_path))
 
-        print(f"\nTask {spec.name}: instruction={spec.prompt!r}")
+        print(f"\nTask {spec.name}: prompt={spec.prompt!r}")
         rollouts = []
         for rollout_idx in range(int(args.n_rollouts)):
             seed = int(args.seed_start) + rollout_idx
@@ -659,10 +786,11 @@ def main() -> None:
                 rzz_angle_deg_range=args.angle_random_range_deg,
                 rzz_tolerance_deg=args.angle_tolerance_deg,
             )
-            rollout = rollout_flower_once(
+            rollout = rollout_flower_gpc_once(
                 seed=seed,
                 env_ckpt_dict=env_ckpt_dict,
                 flower_policy=flower_policy,
+                dynamics_refiner=dynamics_refiner,
                 spec=rollout_spec,
                 instruction=rollout_spec.prompt,
                 scene_config_path=task_scene_config_path,
@@ -672,6 +800,8 @@ def main() -> None:
                 output_dir=task_dir,
                 rollout_tag=tag,
                 horizon=task_horizon,
+                n_candidates=int(args.n_candidates),
+                chunk_horizon=int(args.chunk_horizon),
                 video_cfg=video_cfg,
                 safety_box=rollout_safety_box,
                 gripper_spec=gripper_spec,
@@ -692,36 +822,30 @@ def main() -> None:
                 f"steps={rollout['termination_step']:>3} events=[{events}] final={format_onehot(rollout['final_label'])}"
             )
 
-        summary = task_summary(spec, rollouts, n_candidates=0, horizon=task_horizon)
-        summary["instruction"] = spec.prompt
-        write_json(task_dir / "task_summary.json", summary)
+        summary = task_summary(spec, rollouts, n_candidates=int(args.n_candidates), horizon=task_horizon)
+        summary["policy"] = "flower_gpc_vla"
+        summary["chunk_horizon"] = int(args.chunk_horizon)
+        write_json(task_dir / "task_summary.json", json_ready(summary))
         if rollouts:
             CRU.plot_rollout_xy(
                 rollouts,
                 rollouts[0]["scene_snapshot"],
-                f"FLOWER {spec.name} | STL {summary['stl_satisfied_count']}/{summary['n_rollouts']} | {spec.formula}",
+                f"FLOWER+GPC {spec.name} | STL {summary['stl_satisfied_count']}/{summary['n_rollouts']} | {spec.formula}",
                 save_path=task_dir / "task_rollouts_xy.png",
                 display_inline=False,
             )
-            write_rzz_angle_diagnostic_plot(task_dir, spec, rollouts)
+        write_rzz_angle_diagnostic_plot(task_dir, spec, rollouts)
         all_task_summaries.append(summary)
-        write_summary_tables(run_dir, all_task_summaries)
-        write_json(
-            run_dir / "summary_partial.json",
-            {
-                "run": planned,
-                "completed_tasks": [item["task"] for item in all_task_summaries],
-                "missing_tasks": [item.name for item in specs if item.name not in {s["task"] for s in all_task_summaries}],
-                "tasks": all_task_summaries,
-            },
-        )
 
     write_json(
         run_dir / "summary.json",
-        {
-            "run": planned,
-            "tasks": all_task_summaries,
-        },
+        json_ready(
+            {
+                "run": planned,
+                "tasks": all_task_summaries,
+                "dynamics": dynamics_refiner.meta,
+            }
+        ),
     )
     write_summary_tables(run_dir, all_task_summaries)
     print("\nSummary:", run_dir / "summary_table.md")
