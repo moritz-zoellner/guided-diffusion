@@ -1,0 +1,28 @@
+{
+  "name": "robust_direction_initial",
+  "description": "Robust-direction initial state for complex behavior rollouts: switch/lightbulb on, button/LED off, drawer open, sliding door left, with movable blocks hidden on the left side of the slider closet.",
+  "env_setup": {
+    "sliding_door": 0.28,
+    "drawer": 0.16,
+    "button": 0.0,
+    "switch": 0.085,
+    "lightbulb": 1.0,
+    "green_light": 0.0
+  },
+  "blocks": {
+    "poses": {
+      "block_red": {
+        "position": [-0.24, 0.0924044687, 0.460990009],
+        "rotation": [0.0, 0.0, 0]
+      },
+      "block_blue": {
+        "position": [-0.2, 0.0924044687, 0.460990009],
+        "rotation": [0.0, 0.0, 0]
+      },
+      "block_pink": {
+        "position": [-0.22, 0.0924044687, 0.502],
+        "rotation": [0.0, 0.0, 0]
+      }
+    }
+  }
+}

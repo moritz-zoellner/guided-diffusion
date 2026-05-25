@@ -684,7 +684,24 @@ def _circle_from_aabb(ax, lower, upper, **kwargs):
     return patch
 
 
-def scene_limits_from_snapshot(snapshot: Dict[str, Any], eef_xy: np.ndarray, padding: float = 0.05):
+def _safety_box_from_rollout(rollout: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    if rollout.get("safety_kind") != "eef_avoid_box" and rollout.get("safety_metrics", {}).get("kind") != "eef_avoid_box":
+        return None
+    box = rollout.get("safety_box") or rollout.get("safety_metrics", {}).get("safety_box")
+    if not isinstance(box, dict):
+        return None
+    required = ("x_min", "x_max", "y_min", "y_max")
+    if not all(key in box for key in required):
+        return None
+    return {key: float(box[key]) for key in required}
+
+
+def scene_limits_from_snapshot(
+    snapshot: Dict[str, Any],
+    eef_xy: np.ndarray,
+    padding: float = 0.05,
+    safety_boxes: Optional[Sequence[Dict[str, float]]] = None,
+):
     boxes = []
     for item in snapshot.get("controls", []):
         if "aabb" in item:
@@ -698,6 +715,9 @@ def scene_limits_from_snapshot(snapshot: Dict[str, Any], eef_xy: np.ndarray, pad
     upper_xy = np.max([box[1][:2] for box in boxes], axis=0)
     lower_xy = np.minimum(lower_xy, np.min(eef_xy[:, :2], axis=0))
     upper_xy = np.maximum(upper_xy, np.max(eef_xy[:, :2], axis=0))
+    for box in safety_boxes or []:
+        lower_xy = np.minimum(lower_xy, np.asarray([box["x_min"], box["y_min"]], dtype=np.float32))
+        upper_xy = np.maximum(upper_xy, np.asarray([box["x_max"], box["y_max"]], dtype=np.float32))
     return (float(lower_xy[0] - padding), float(upper_xy[0] + padding)), (
         float(lower_xy[1] - padding),
         float(upper_xy[1] + padding),
@@ -753,6 +773,7 @@ def plot_rollout_xy(
 
     paths = [np.asarray(item["eef_xy"], dtype=np.float32) for item in rollouts]
     behaviors = [item["behavior"] for item in rollouts]
+    safety_boxes = [box for box in (_safety_box_from_rollout(item) for item in rollouts) if box is not None]
     unique_behaviors = sorted(set(behaviors))
     cmap = plt.get_cmap("tab10")
     behavior_colors = {behavior: cmap(idx % cmap.N) for idx, behavior in enumerate(unique_behaviors)}
@@ -761,23 +782,43 @@ def plot_rollout_xy(
     fig, ax = plt.subplots(figsize=(9, 7))
     ax.set_facecolor("#fbf7ef")
     draw_scene_snapshot(ax, scene_snapshot)
+    for idx, box in enumerate(safety_boxes):
+        from matplotlib.patches import Rectangle
+
+        rect = Rectangle(
+            (box["x_min"], box["y_min"]),
+            box["x_max"] - box["x_min"],
+            box["y_max"] - box["y_min"],
+            facecolor="#ef4444",
+            edgecolor="#991b1b",
+            linewidth=1.2,
+            linestyle="--",
+            alpha=0.18,
+            label="avoid box" if idx == 0 else None,
+        )
+        ax.add_patch(rect)
     for item, eef_xy in zip(rollouts, paths):
         color = behavior_colors[item["behavior"]]
         ax.plot(eef_xy[:, 0], eef_xy[:, 1], color=color, linewidth=2.0, alpha=0.75)
         ax.scatter(eef_xy[0, 0], eef_xy[0, 1], c=[color], s=28, edgecolors="white", linewidths=0.7, alpha=0.85)
         ax.scatter(eef_xy[-1, 0], eef_xy[-1, 1], c=[color], s=42, edgecolors="black", linewidths=0.7, alpha=0.9)
 
-    xlim, ylim = scene_limits_from_snapshot(scene_snapshot, all_eef_xy)
+    xlim, ylim = scene_limits_from_snapshot(scene_snapshot, all_eef_xy, safety_boxes=safety_boxes)
     ax.set_xlim(*xlim)
     ax.set_ylim(*ylim)
     ax.set_title(title)
     ax.set_xlabel("world x [m]")
     ax.set_ylabel("world y [m]")
+    handles = [
+        Line2D([0], [0], color=behavior_colors[behavior], lw=2.5, label=f"{behavior} ({behaviors.count(behavior)})")
+        for behavior in unique_behaviors
+    ]
+    if safety_boxes:
+        from matplotlib.patches import Patch
+
+        handles.append(Patch(facecolor="#ef4444", edgecolor="#991b1b", alpha=0.18, linestyle="--", label="avoid box"))
     ax.legend(
-        handles=[
-            Line2D([0], [0], color=behavior_colors[behavior], lw=2.5, label=f"{behavior} ({behaviors.count(behavior)})")
-            for behavior in unique_behaviors
-        ],
+        handles=handles,
         loc="upper right",
     )
 
@@ -814,8 +855,19 @@ def plot_rollouts_from_trace_summaries(
     scene_snapshot = load_json_config(first_item["scene_snapshot"])
     rollouts = []
     for item in rollout_summaries:
-        trace = np.load(item["trace"])
-        rollouts.append({"eef_xy": trace["eef_xy"], "behavior": item["behavior"]})
+        with np.load(item["trace"]) as trace:
+            rollout = {"eef_xy": trace["eef_xy"], "behavior": item["behavior"]}
+            if item.get("safety_kind") is not None:
+                rollout["safety_kind"] = item["safety_kind"]
+            if item.get("safety_metrics") is not None:
+                rollout["safety_metrics"] = item["safety_metrics"]
+            if item.get("safety_box") is not None:
+                rollout["safety_box"] = item["safety_box"]
+            elif "safety_box" in trace:
+                x_min, x_max, y_min, y_max = [float(value) for value in np.asarray(trace["safety_box"]).tolist()]
+                rollout["safety_kind"] = "eef_avoid_box"
+                rollout["safety_box"] = {"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max}
+            rollouts.append(rollout)
 
     if title is None:
         title = f"Top-down rollouts | {first_item['scene_config']} | {len(rollout_summaries)} trajectories"
@@ -866,6 +918,8 @@ def save_rollout_artifacts(
         trace["initial_label"] = np.asarray(rollout["initial_label"], dtype=np.int32)
     if "final_label" in rollout:
         trace["final_label"] = np.asarray(rollout["final_label"], dtype=np.int32)
+    if "labels_over_time" in rollout:
+        trace["labels_over_time"] = np.asarray(rollout["labels_over_time"], dtype=np.int32)
     if "pre_settle_label" in rollout:
         trace["pre_settle_label"] = np.asarray(rollout["pre_settle_label"], dtype=np.int32)
     if "settle_scene_states" in rollout:
@@ -874,6 +928,31 @@ def save_rollout_artifacts(
         trace["settle_robot_states"] = np.asarray(rollout["settle_robot_states"], dtype=np.float32)
     if "settle_action" in rollout:
         trace["settle_action"] = np.asarray(rollout["settle_action"], dtype=np.float32)
+    if "tcp_rzz" in rollout:
+        trace["tcp_rzz"] = np.asarray(rollout["tcp_rzz"], dtype=np.float32)
+    if "tcp_tilt_angle_deg" in rollout:
+        trace["tcp_tilt_angle_deg"] = np.asarray(rollout["tcp_tilt_angle_deg"], dtype=np.float32)
+    if rollout.get("safety_box") is not None:
+        box = rollout["safety_box"]
+        trace["safety_box"] = np.asarray(
+            [box["x_min"], box["x_max"], box["y_min"], box["y_max"]],
+            dtype=np.float32,
+        )
+    if rollout.get("rzz_spec") is not None:
+        rzz_spec = rollout["rzz_spec"]
+        trace["rzz_spec"] = np.asarray(
+            [
+                rzz_spec["angle_deg"],
+                rzz_spec["axis_sign"],
+                rzz_spec["tolerance"],
+                rzz_spec["smooth_min_tau"],
+            ],
+            dtype=np.float32,
+        )
+    if "warmup_actions" in rollout:
+        trace["warmup_actions"] = np.asarray(rollout["warmup_actions"], dtype=np.float32)
+    if "warmup_robot_states" in rollout:
+        trace["warmup_robot_states"] = np.asarray(rollout["warmup_robot_states"], dtype=np.float32)
     np.savez_compressed(trace_path, **trace)
     save_scene_snapshot(rollout["scene_snapshot"], scene_snapshot_path)
 
