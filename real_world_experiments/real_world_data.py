@@ -314,17 +314,208 @@ def _episode_length(episode: dict) -> int:
     return lengths[0]
 
 
-def _compact_episode_arrays(episode: dict, gripper_mid: float) -> dict[str, np.ndarray]:
+def _true_runs(values: np.ndarray) -> list[tuple[int, int]]:
+    values = np.asarray(values, dtype=bool)
+    runs = []
+    start = None
+    for idx, value in enumerate(values):
+        if value and start is None:
+            start = idx
+        if (not value or idx == len(values) - 1) and start is not None:
+            end = idx if not value else idx + 1
+            runs.append((start, end))
+            start = None
+    return runs
+
+
+def _noop_transition_mask(
+    actions: np.ndarray,
+    gripper_binary: np.ndarray,
+    pos_threshold: float,
+    rot_threshold_rad: float,
+) -> np.ndarray:
+    """Return no-op mask over transitions t -> t+1.
+
+    A transition is a no-op only when the gripper state does not change and both
+    the Cartesian and rotation deltas are tiny. The final synthesized action has
+    no next observation, so it is intentionally excluded.
+    """
+    if len(actions) < 2:
+        return np.zeros(0, dtype=bool)
+    gripper_binary = np.asarray(gripper_binary, dtype=np.float32).reshape(-1)
+    same_gripper = np.sign(gripper_binary[:-1]) == np.sign(gripper_binary[1:])
+    pos_norm = np.linalg.norm(actions[:-1, :3], axis=1)
+    rot_norm = np.linalg.norm(actions[:-1, 3:6], axis=1)
+    return (same_gripper & (pos_norm < float(pos_threshold)) & (rot_norm < float(rot_threshold_rad))).astype(bool)
+
+
+def _condensed_keep_indices(noop_mask: np.ndarray, n_steps: int, keep_per_cluster: int) -> tuple[np.ndarray, dict]:
+    """Condense no-op transition clusters and return kept observation indices."""
+    keep_per_cluster = max(0, int(keep_per_cluster))
+    keep = np.ones(n_steps, dtype=bool)
+    clusters = _true_runs(noop_mask)
+    dropped_transitions = 0
+
+    for start, end in clusters:
+        # Dropping transition i means removing its next observation i+1. Keeping
+        # one no-op leaves one explicit stationary step at the cluster start.
+        drop_start = start + keep_per_cluster
+        if drop_start >= end:
+            continue
+        drop_obs_indices = np.arange(drop_start + 1, end + 1)
+        drop_obs_indices = drop_obs_indices[(0 <= drop_obs_indices) & (drop_obs_indices < n_steps)]
+        keep[drop_obs_indices] = False
+        dropped_transitions += len(drop_obs_indices)
+
+    keep_indices = np.flatnonzero(keep)
+    stats = {
+        "noop_clusters": int(len(clusters)),
+        "noop_actions": int(np.sum(noop_mask)),
+        "dropped_noop_actions": int(dropped_transitions),
+        "kept_noop_actions_from_clusters": int(np.sum(noop_mask) - dropped_transitions),
+        "max_noop_cluster_len": int(max((end - start for start, end in clusters), default=0)),
+    }
+    return keep_indices.astype(np.int64), stats
+
+
+def _compact_episode_arrays(
+    episode: dict,
+    gripper_mid: float,
+    condense_noop: bool = False,
+    noop_pos_threshold: float = 0.001,
+    noop_rot_threshold_deg: float = 0.5,
+    noop_keep_per_cluster: int = 1,
+    drop_all_noop_episodes: bool = False,
+) -> tuple[dict[str, np.ndarray] | None, dict]:
     n_steps = _episode_length(episode)
 
     eef_pos = _as_float32(episode["ee_pos"])
     eef_quat_wxyz = normalize_quat_wxyz(episode["ee_quat_wxyz"])
+    gripper_raw = np.asarray(episode["gripper_pos"], dtype=np.float32)
+    original_actions = _synthesized_pose_actions(eef_pos, eef_quat_wxyz, gripper_raw, gripper_mid)
+    original_gripper_binary = _gripper_binary(gripper_raw, gripper_mid)
+
+    cleanup_stats = {
+        "original_num_samples": int(n_steps),
+        "condense_noop": bool(condense_noop),
+        "noop_pos_threshold": float(noop_pos_threshold),
+        "noop_rot_threshold_deg": float(noop_rot_threshold_deg),
+        "noop_keep_per_cluster": int(noop_keep_per_cluster),
+        "dropped_as_all_noop": False,
+        "kept_indices": None,
+        "num_samples_after_cleanup": int(n_steps),
+        "dropped_samples": 0,
+        "noop_actions": 0,
+        "dropped_noop_actions": 0,
+        "noop_clusters": 0,
+        "max_noop_cluster_len": 0,
+    }
+
+    if condense_noop:
+        noop_mask = _noop_transition_mask(
+            original_actions,
+            original_gripper_binary,
+            pos_threshold=noop_pos_threshold,
+            rot_threshold_rad=np.deg2rad(float(noop_rot_threshold_deg)),
+        )
+        cleanup_stats["noop_actions"] = int(np.sum(noop_mask))
+        initial_noop_clusters = _true_runs(noop_mask)
+        cleanup_stats["noop_clusters"] = int(len(initial_noop_clusters))
+        cleanup_stats["max_noop_cluster_len"] = int(max((end - start for start, end in initial_noop_clusters), default=0))
+        if drop_all_noop_episodes and len(noop_mask) > 0 and bool(np.all(noop_mask)):
+            cleanup_stats["dropped_as_all_noop"] = True
+            cleanup_stats["dropped_samples"] = int(n_steps)
+            cleanup_stats["num_samples_after_cleanup"] = 0
+            return None, cleanup_stats
+
+        keep_indices = np.arange(n_steps, dtype=np.int64)
+        cleanup_passes = []
+        total_dropped_noop_actions = 0
+
+        # After deleting stationary observations, the newly synthesized action
+        # across the remaining observations can occasionally become stationary
+        # too. Iterate until the final recomputed trajectory has no cluster
+        # longer than the requested keep count.
+        for pass_idx in range(8):
+            current_eef_pos = eef_pos[keep_indices]
+            current_eef_quat_wxyz = eef_quat_wxyz[keep_indices]
+            current_gripper_raw = gripper_raw[keep_indices]
+            current_actions = _synthesized_pose_actions(
+                current_eef_pos,
+                current_eef_quat_wxyz,
+                current_gripper_raw,
+                gripper_mid,
+            )
+            current_gripper_binary = _gripper_binary(current_gripper_raw, gripper_mid)
+            current_noop_mask = _noop_transition_mask(
+                current_actions,
+                current_gripper_binary,
+                pos_threshold=noop_pos_threshold,
+                rot_threshold_rad=np.deg2rad(float(noop_rot_threshold_deg)),
+            )
+            pass_keep_indices, condense_stats = _condensed_keep_indices(
+                current_noop_mask,
+                n_steps=len(current_eef_pos),
+                keep_per_cluster=noop_keep_per_cluster,
+            )
+            dropped_this_pass = int(len(current_eef_pos) - len(pass_keep_indices))
+            cleanup_passes.append({
+                "pass": int(pass_idx),
+                "num_samples_before": int(len(current_eef_pos)),
+                "noop_actions": int(condense_stats["noop_actions"]),
+                "noop_clusters": int(condense_stats["noop_clusters"]),
+                "max_noop_cluster_len": int(condense_stats["max_noop_cluster_len"]),
+                "dropped_noop_actions": dropped_this_pass,
+            })
+            if dropped_this_pass == 0:
+                break
+            keep_indices = keep_indices[pass_keep_indices]
+            total_dropped_noop_actions += dropped_this_pass
+
+        if len(keep_indices) < 2:
+            cleanup_stats["dropped_as_all_noop"] = True
+            cleanup_stats["dropped_samples"] = int(n_steps)
+            cleanup_stats["num_samples_after_cleanup"] = int(len(keep_indices))
+            return None, cleanup_stats
+
+        final_eef_pos = eef_pos[keep_indices]
+        final_eef_quat_wxyz = eef_quat_wxyz[keep_indices]
+        final_gripper_raw = gripper_raw[keep_indices]
+        final_actions = _synthesized_pose_actions(
+            final_eef_pos,
+            final_eef_quat_wxyz,
+            final_gripper_raw,
+            gripper_mid,
+        )
+        final_noop_mask = _noop_transition_mask(
+            final_actions,
+            _gripper_binary(final_gripper_raw, gripper_mid),
+            pos_threshold=noop_pos_threshold,
+            rot_threshold_rad=np.deg2rad(float(noop_rot_threshold_deg)),
+        )
+        final_noop_clusters = _true_runs(final_noop_mask)
+        cleanup_stats["dropped_noop_actions"] = int(total_dropped_noop_actions)
+        cleanup_stats["kept_noop_actions_from_clusters"] = int(np.sum(final_noop_mask))
+        cleanup_stats["cleanup_passes"] = cleanup_passes
+        cleanup_stats["final_noop_actions"] = int(np.sum(final_noop_mask))
+        cleanup_stats["final_noop_clusters"] = int(len(final_noop_clusters))
+        cleanup_stats["final_max_noop_cluster_len"] = int(max((end - start for start, end in final_noop_clusters), default=0))
+        cleanup_stats["kept_indices"] = keep_indices.tolist()
+        cleanup_stats["num_samples_after_cleanup"] = int(len(keep_indices))
+        cleanup_stats["dropped_samples"] = int(n_steps - len(keep_indices))
+
+        eef_pos = eef_pos[keep_indices]
+        eef_quat_wxyz = eef_quat_wxyz[keep_indices]
+        gripper_raw = gripper_raw[keep_indices]
+
     eef_quat_xyzw = quat_wxyz_to_xyzw(eef_quat_wxyz)
     eef_rot6d = quat_wxyz_to_rot6d(eef_quat_wxyz)
-    gripper = _column(episode["gripper_pos"])
-    gripper_binary = _column(_gripper_binary(episode["gripper_pos"], gripper_mid))
+    gripper = _column(gripper_raw)
+    gripper_binary = _column(_gripper_binary(gripper_raw, gripper_mid))
 
     obj_pose_world = np.asarray(episode["obj_pose_4x4_world"], dtype=np.float32)
+    if condense_noop:
+        obj_pose_world = obj_pose_world[keep_indices]
     obj_pos = obj_pose_world[:, :3, 3].astype(np.float32)
     obj_rot = obj_pose_world[:, :3, :3].astype(np.float32)
     obj_quat_wxyz = matrix_to_quat_wxyz(obj_rot)
@@ -333,15 +524,17 @@ def _compact_episode_arrays(episode: dict, gripper_mid: float) -> dict[str, np.n
     gripper_to_obj_pos = (obj_pos - eef_pos).astype(np.float32)
     object_obs = np.concatenate([obj_pos, obj_quat_xyzw, gripper_to_obj_pos], axis=-1).astype(np.float32)
 
-    actions = _synthesized_pose_actions(eef_pos, eef_quat_wxyz, episode["gripper_pos"], gripper_mid)
+    actions = _synthesized_pose_actions(eef_pos, eef_quat_wxyz, gripper_raw, gripper_mid)
     logged_actions = _as_float32(episode["action"])
-    dones = np.zeros(n_steps, dtype=bool)
+    if condense_noop:
+        logged_actions = logged_actions[keep_indices]
+    dones = np.zeros(len(eef_pos), dtype=bool)
     dones[-1] = True
 
-    return {
+    arrays = {
         "actions": actions,
         "actions_logged_xyz": logged_actions,
-        "rewards": np.zeros(n_steps, dtype=np.float32),
+        "rewards": np.zeros(len(eef_pos), dtype=np.float32),
         "dones": dones,
         "obs/robot0_eef_pos": eef_pos,
         "obs/robot0_eef_quat": eef_quat_xyzw,
@@ -359,6 +552,7 @@ def _compact_episode_arrays(episode: dict, gripper_mid: float) -> dict[str, np.n
         "obs/cheezit_to_eef_pos": gripper_to_obj_pos,
         "states": np.empty((0,), dtype=np.float32),
     }
+    return arrays, cleanup_stats
 
 
 def _write_dataset(group: h5py.Group, name: str, value: np.ndarray):
@@ -396,6 +590,11 @@ def convert_saved_episodes_to_hdf5(
     seed: int = 42,
     overwrite: bool = False,
     min_length: int = 2,
+    condense_noop: bool = False,
+    noop_pos_threshold: float = 0.001,
+    noop_rot_threshold_deg: float = 0.5,
+    noop_keep_per_cluster: int = 1,
+    drop_all_noop_episodes: bool = False,
 ) -> dict:
     """Read ROS saved episode pickle files and write a compact training HDF5.
 
@@ -437,6 +636,7 @@ def convert_saved_episodes_to_hdf5(
             "object_obs": "cheezit_pos(3), cheezit_quat_xyzw(4), cheezit_pos_minus_eef_pos(3)",
             "action": "dpos_world(3), drotvec_world(3), next_gripper_binary(1)",
             "rotation_delta": "q_delta = q_next * conjugate(q_current); q_next = q_delta * q_current",
+            "noop_condensed": bool(condense_noop),
         },
     }
 
@@ -451,14 +651,32 @@ def convert_saved_episodes_to_hdf5(
                 skipped.append({"path": str(path), "num_samples": int(n_steps), "reason": "too_short"})
                 continue
 
-            arrays = _compact_episode_arrays(episode, gripper_mid=gripper_mid)
+            arrays, cleanup_stats = _compact_episode_arrays(
+                episode,
+                gripper_mid=gripper_mid,
+                condense_noop=condense_noop,
+                noop_pos_threshold=noop_pos_threshold,
+                noop_rot_threshold_deg=noop_rot_threshold_deg,
+                noop_keep_per_cluster=noop_keep_per_cluster,
+                drop_all_noop_episodes=drop_all_noop_episodes,
+            )
+            if arrays is None:
+                skipped.append({
+                    "path": str(path),
+                    "num_samples": int(n_steps),
+                    "reason": "all_noop_after_cleanup" if cleanup_stats["dropped_as_all_noop"] else "cleanup_too_short",
+                    "cleanup": cleanup_stats,
+                })
+                continue
             demo_key = f"demo_{len(demo_records)}"
             demo = data_group.create_group(demo_key)
-            demo.attrs["num_samples"] = int(n_steps)
+            demo.attrs["num_samples"] = int(len(arrays["actions"]))
+            demo.attrs["num_samples_original"] = int(n_steps)
             demo.attrs["source_path"] = str(path)
             demo.attrs["source_session"] = path.parent.name
             demo.attrs["source_episode"] = path.stem
             demo.attrs["behavior"] = path.parent.name
+            demo.attrs["cleanup"] = json.dumps(cleanup_stats)
             for name, value in arrays.items():
                 _write_dataset(demo, name, value)
 
@@ -468,11 +686,17 @@ def convert_saved_episodes_to_hdf5(
                     "source_path": str(path),
                     "session": path.parent.name,
                     "source_episode": path.stem,
-                    "num_samples": int(n_steps),
+                    "num_samples": int(len(arrays["actions"])),
+                    "num_samples_original": int(n_steps),
+                    "dropped_samples": int(cleanup_stats["dropped_samples"]),
+                    "noop_actions": int(cleanup_stats["noop_actions"]),
+                    "dropped_noop_actions": int(cleanup_stats["dropped_noop_actions"]),
+                    "noop_clusters": int(cleanup_stats["noop_clusters"]),
+                    "max_noop_cluster_len": int(cleanup_stats["max_noop_cluster_len"]),
                     "action_dim": int(arrays["actions"].shape[-1]),
                 }
             )
-            total_samples += int(n_steps)
+            total_samples += int(len(arrays["actions"]))
 
         data_group.attrs["total"] = int(total_samples)
 
@@ -491,6 +715,20 @@ def convert_saved_episodes_to_hdf5(
             "train_demos": len(train_keys),
             "valid_demos": len(valid_keys),
             "skipped": skipped,
+            "cleanup": {
+                "condense_noop": bool(condense_noop),
+                "noop_definition": (
+                    "same gripper sign, ||dpos|| < noop_pos_threshold, "
+                    "||drotvec|| < noop_rot_threshold_deg"
+                ),
+                "noop_pos_threshold": float(noop_pos_threshold),
+                "noop_rot_threshold_deg": float(noop_rot_threshold_deg),
+                "noop_keep_per_cluster": int(noop_keep_per_cluster),
+                "drop_all_noop_episodes": bool(drop_all_noop_episodes),
+                "total_original_samples": int(sum(record["num_samples_original"] for record in demo_records) + sum(item.get("num_samples", 0) for item in skipped)),
+                "total_dropped_samples_from_kept_demos": int(sum(record["dropped_samples"] for record in demo_records)),
+                "total_dropped_noop_actions_from_kept_demos": int(sum(record["dropped_noop_actions"] for record in demo_records)),
+            },
             "obs_keys_for_dp": ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos", "object"],
             "obs_keys_for_real_world_dp_config": [
                 "eef_pos",
@@ -513,7 +751,7 @@ def convert_saved_episodes_to_hdf5(
             ],
             "action_note": (
                 "actions are synthesized from measured consecutive EEF poses so they reconstruct the next state; "
-                "the original logged 3D position-delta command is preserved in actions_logged_xyz"
+                "the original logged 3D position-delta command at kept timesteps is preserved in actions_logged_xyz"
             ),
             "rotation_delta_convention": "q_delta = q_next * conjugate(q_current); q_next = q_delta * q_current",
             "gripper_binary_midpoint": gripper_mid,
@@ -537,6 +775,11 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--min-length", type=int, default=2)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--condense-noop", action="store_true")
+    parser.add_argument("--noop-pos-threshold", type=float, default=0.001)
+    parser.add_argument("--noop-rot-threshold-deg", type=float, default=0.5)
+    parser.add_argument("--noop-keep-per-cluster", type=int, default=1)
+    parser.add_argument("--drop-all-noop-episodes", action="store_true")
     args = parser.parse_args()
     metadata = convert_saved_episodes_to_hdf5(
         source_dirs=args.source_dirs,
@@ -545,6 +788,11 @@ def main():
         seed=args.seed,
         overwrite=args.overwrite,
         min_length=args.min_length,
+        condense_noop=args.condense_noop,
+        noop_pos_threshold=args.noop_pos_threshold,
+        noop_rot_threshold_deg=args.noop_rot_threshold_deg,
+        noop_keep_per_cluster=args.noop_keep_per_cluster,
+        drop_all_noop_episodes=args.drop_all_noop_episodes,
     )
     print(f"Wrote {metadata['num_demos']} demos / {metadata['total_samples']} samples to {metadata['output']}")
     print(f"Train demos: {metadata['train_demos']} | Valid demos: {metadata['valid_demos']}")

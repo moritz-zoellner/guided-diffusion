@@ -1,7 +1,7 @@
 {
     "algo_name": "diffusion_policy",
     "experiment": {
-        "name": "real_world_cheezit_dp",
+        "name": "real_world_cheezit_dp_condensed",
         "validate": true,
         "logging": {
             "terminal_output_to_txt": true,
@@ -38,8 +38,8 @@
         "ckpt_path": null
     },
     "train": {
-        "data": "/home/moritz/src/guided-diffusion/data/real_world/cheezit_pouring.hdf5",
-        "output_dir": "/home/moritz/src/guided-diffusion/outputs/real_world/base_policy/",
+        "data": "/home/moritz/src/guided-diffusion/data/real_world/cheezit_pouring_condensed.hdf5",
+        "output_dir": "/home/moritz/src/guided-diffusion/outputs/real_world/base_policy_condensed/",
         "normalize_weights_by_ds_size": false,
         "num_data_workers": 2,
         "hdf5_cache_mode": "low_dim",

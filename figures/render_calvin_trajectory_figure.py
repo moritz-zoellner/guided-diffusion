@@ -18,8 +18,30 @@ ENV_CHECKPOINT = REPO_ROOT / "outputs/calvin/base_policy/calvin_D_base_dp/202605
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs/paper_plots/5-step-figure"
 TEXTURE_DIR = REPO_ROOT / "assets/calvin_render_textures"
 LOCAL_BLENDER = REPO_ROOT / "tools/blender-4.2.0-linux-x64/blender"
-TASK_COLOR_HEX = ["#0072B2", "#009E73", "#E69F00", "#D55E00", "#AA3377"]
+OUR_BLUE_HEX = "#275fca"
+UNSAFE_RED_HEX = "#b85f5a"
+FLOWER_GREEN_HEX = "#4e8b68"
+BASE_PRIOR_COLOR_HEX = ["#A37B63", "#5B6C7D", "#7D8A63", "#6D7E95"]
+TASK_COLOR_HEX = [OUR_BLUE_HEX]
+ALIGN_START_PREFIX_POINTS = 14
+ALIGN_START_MIN_DISTANCE = 0.004
+ALIGN_START_MAX_DISTANCE = 0.16
+SCENE_SLIDE_INDEX = 0
+SCENE_DRAWER_INDEX = 1
+SCENE_BUTTON_INDEX = 2
+SCENE_SWITCH_INDEX = 3
+SCENE_LIGHTBULB_INDEX = 4
+SCENE_LED_INDEX = 5
+DRAWER_RENDER_CLOSE_THRESHOLD = 0.125
+DRAWER_RENDER_CLOSE_OFFSET = 0.075
 SAFETY_SWITCH_DIR = REPO_ROOT / "outputs/calvin/paper_stls/F_switch_G_safety/20260506_125354"
+COMPLEX_REGION_DIR = REPO_ROOT / "outputs/calvin_paper/complex-behaviors/hint2_complex_N10/region"
+COMPLEX_CHAINED_DIR = REPO_ROOT / "outputs/calvin_paper/complex-behaviors/hint2_chained_N10_restored/chained"
+COMPLEX_CONDITIONAL_DIR = REPO_ROOT / "outputs/calvin_paper/complex-behaviors/hint2_complex_N10/conditional"
+FLOWER_COMPLEX_DIR = REPO_ROOT / "outputs/calvin_paper/complex-behaviors/baselines/flower/flower_complex_N10_same_specs"
+FLOWER_CHAINED_ROLLOUT_DIR = FLOWER_COMPLEX_DIR / "chained/rollout_002_seed_002"
+FLOWER_CONDITIONAL_ROLLOUT_DIR = FLOWER_COMPLEX_DIR / "conditional/rollout_000_seed_000"
+FLOWER_REGION_DIR = FLOWER_COMPLEX_DIR / "region"
 FLOWER_ROLLOUT_DIR = REPO_ROOT / (
     "outputs/calvin/baselines/flower/our_env_rollouts/"
     "flower_vla_scene_blocks_hidden_rollouts1_horizon300_seed0_07-05-26__00-15-13/rollout_000"
@@ -54,7 +76,7 @@ BASE_DIVERSE_BATCHES = [
         "door_left",
         REPO_ROOT
         / "outputs/calvin/guidance_test/sample_rank_batch_policy_epoch280_scene_blocks_hidden_rollouts10_target7_candidates16_horizon500_05-05-26__23-25-03",
-        4,
+        3,
         True,
     ),
 ]
@@ -98,6 +120,11 @@ GEOM_SPHERE = 2
 GEOM_BOX = 3
 GEOM_CYLINDER = 4
 GEOM_MESH = 5
+LABEL_IDX = {
+    "switch_off": 1,
+    "button_pressed": 4,
+    "drawer_closed": 6,
+}
 
 bpy = None
 Quaternion = None
@@ -144,6 +171,22 @@ def task_color(index: int, count: int) -> list[float]:
     return color_ramp(index, count)
 
 
+def method_color() -> list[float]:
+    return hex_to_rgba(OUR_BLUE_HEX)
+
+
+def unsafe_color() -> list[float]:
+    return hex_to_rgba(UNSAFE_RED_HEX)
+
+
+def flower_color() -> list[float]:
+    return hex_to_rgba(FLOWER_GREEN_HEX)
+
+
+def base_prior_color(index: int) -> list[float]:
+    return hex_to_rgba(BASE_PRIOR_COLOR_HEX[index % len(BASE_PRIOR_COLOR_HEX)])
+
+
 def next_versioned_output(output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     prefix = output_dir.name
@@ -168,7 +211,16 @@ def parse_driver_args() -> argparse.Namespace:
     parser.add_argument("--rollout-dir", type=Path, default=DEFAULT_ROLLOUT_DIR)
     parser.add_argument(
         "--figure-preset",
-        choices=["single", "safety-switch", "flower", "base-diverse", "ordered-stage"],
+        choices=[
+            "single",
+            "safety-switch",
+            "flower",
+            "base-diverse",
+            "ordered-stage",
+            "complex-region",
+            "complex-chained",
+            "complex-conditional",
+        ],
         default="single",
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
@@ -316,28 +368,39 @@ def summary_target_events(rollout_dir: Path, eef_xyz) -> list[dict] | None:
     return summary_target_events_for_trace(rollout_dir / "rollout_trace.npz", eef_xyz)
 
 
+def events_from_raw_events(raw_events: list[dict], eef_xyz, colors: list[list[float]] | None = None) -> list[dict]:
+    events = []
+    for idx, event in enumerate(raw_events):
+        step = min(int(event["step"]), len(eef_xyz) - 1)
+        color = colors[idx] if colors is not None and idx < len(colors) else method_color()
+        events.append(
+            {
+                "name": str(event["target_name"]),
+                "step": step,
+                "position": eef_xyz[step].astype(float).tolist(),
+                "color": color,
+            }
+        )
+    return events
+
+
 def summary_target_events_for_trace(trace_path: Path, eef_xyz, colors: list[list[float]] | None = None) -> list[dict] | None:
-    summary_path = trace_path.parent.parent / "summary.json"
-    if not summary_path.exists():
-        return None
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    for rollout in summary.get("rollouts", []):
-        if Path(rollout.get("trace", "")).resolve() != trace_path.resolve():
+    rollout_summary = trace_path.parent / "rollout_summary.json"
+    if rollout_summary.exists():
+        summary = json.loads(rollout_summary.read_text(encoding="utf-8"))
+        raw_events = summary.get("target_events", [])
+        if raw_events:
+            return events_from_raw_events(raw_events, eef_xyz, colors=colors)
+
+    for filename in ("task_summary.json", "summary.json"):
+        summary_path = trace_path.parent.parent / filename
+        if not summary_path.exists():
             continue
-        raw_events = rollout.get("target_events", [])
-        events = []
-        for idx, event in enumerate(raw_events):
-            step = min(int(event["step"]), len(eef_xyz) - 1)
-            color = colors[idx] if colors is not None and idx < len(colors) else task_color(idx, len(raw_events))
-            events.append(
-                {
-                    "name": str(event["target_name"]),
-                    "step": step,
-                    "position": eef_xyz[step].astype(float).tolist(),
-                    "color": color,
-                }
-            )
-        return events
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        for rollout in summary.get("rollouts", []):
+            if Path(rollout.get("trace", "")).resolve() != trace_path.resolve():
+                continue
+            return events_from_raw_events(rollout.get("target_events", []), eef_xyz, colors=colors)
     return None
 
 
@@ -348,8 +411,8 @@ def event_markers(scene_states, eef_xyz, rollout_dir: Path) -> list[dict]:
 
     events = []
     candidates = [
-        ("button_on", first_crossing(scene_states[:, 5], 0.5), task_color(0, 2)),
-        ("drawer_open", first_crossing(scene_states[:, 1], 0.08), task_color(1, 2)),
+        ("button_on", first_crossing(scene_states[:, 5], 0.5), method_color()),
+        ("drawer_open", first_crossing(scene_states[:, 1], 0.08), method_color()),
     ]
     for name, step, color in candidates:
         if step is None:
@@ -383,6 +446,26 @@ def load_trace_points(trace_path: Path, horizon: int | None = None):
     return trace, points
 
 
+def label_rising_edges(trace, label_idx: int) -> list[int]:
+    import numpy as np
+
+    labels = np.asarray(trace["labels_over_time"], dtype=np.int32)
+    values = labels[:, label_idx]
+    return [int(idx) for idx in (np.flatnonzero((values[1:] == 1) & (values[:-1] == 0)) + 1)]
+
+
+def halfway_between_first_two_label_edges(trace, label_idx: int) -> int | None:
+    edges = label_rising_edges(trace, label_idx)
+    if len(edges) < 2:
+        return None
+    return int(round((edges[0] + edges[1]) * 0.5))
+
+
+def first_label_rising_edge(trace, label_idx: int) -> int | None:
+    edges = label_rising_edges(trace, label_idx)
+    return edges[0] if edges else None
+
+
 def trajectory_from_trace(
     name: str,
     trace_path: Path,
@@ -403,30 +486,258 @@ def trajectory_from_trace(
     )
 
 
+def trajectory_from_rollout(
+    name: str,
+    rollout_dir: Path,
+    color: list[float],
+    horizon: int | None = None,
+    include_events: bool = True,
+    event_colors: list[list[float]] | None = None,
+    radius_scale: float | None = None,
+) -> tuple[dict, object]:
+    trace_path = rollout_trace_path(rollout_dir)
+    if horizon is None:
+        horizon = rollout_horizon(rollout_dir)
+    trace, points = load_trace_points(trace_path, horizon=horizon)
+    events = []
+    if include_events:
+        events = summary_target_events_for_trace(
+            trace_path,
+            points,
+            colors=event_colors if event_colors is not None else [color] * 16,
+        ) or []
+    trajectory = {
+        "name": name,
+        "trace_path": str(trace_path.resolve()),
+        "points": points.astype(float).tolist(),
+        "color": color,
+        "events": events,
+    }
+    if radius_scale is not None:
+        trajectory["radius_scale"] = float(radius_scale)
+        trajectory["halo_radius_scale"] = float(radius_scale)
+    return trajectory, trace
+
+
+def first_target_point(trajectories: list[dict]):
+    import numpy as np
+
+    for trajectory in trajectories:
+        events = sorted(trajectory.get("events", []), key=lambda event: int(event["step"]))
+        if events:
+            return np.asarray(events[0]["position"], dtype=float)
+    return None
+
+
+def smooth_start_prefix(anchor, start, points, count: int) -> list[list[float]]:
+    import numpy as np
+
+    p0 = np.asarray(anchor, dtype=float)
+    p3 = np.asarray(start, dtype=float)
+    delta = p3 - p0
+    dist = float(np.linalg.norm(delta[:2]))
+    if dist <= 1e-8 or count <= 0:
+        return []
+
+    if len(points) > 2:
+        lookahead = np.asarray(points[min(5, len(points) - 1)], dtype=float) - p3
+    else:
+        lookahead = delta
+    delta_xy = delta[:2]
+    lookahead_xy = lookahead[:2]
+    if np.linalg.norm(lookahead_xy) < 1e-8 or float(np.dot(lookahead_xy, delta_xy)) < 0.0:
+        end_tangent_xy = delta_xy
+    else:
+        end_tangent_xy = lookahead_xy / np.linalg.norm(lookahead_xy) * dist
+
+    c0_xy = p0[:2]
+    c1_xy = p0[:2] + 0.35 * delta_xy
+    c2_xy = p3[:2] - 0.25 * end_tangent_xy
+    c3_xy = p3[:2]
+
+    prefix = []
+    for k in range(count):
+        t = k / float(count)
+        one_minus_t = 1.0 - t
+        xy = (
+            (one_minus_t ** 3) * c0_xy
+            + 3.0 * (one_minus_t ** 2) * t * c1_xy
+            + 3.0 * one_minus_t * (t ** 2) * c2_xy
+            + (t ** 3) * c3_xy
+        )
+        z = (1.0 - t) * p0[2] + t * p3[2]
+        prefix.append([float(xy[0]), float(xy[1]), float(z)])
+    return prefix
+
+
+def align_trajectory_starts(plot_spec: dict) -> dict:
+    import numpy as np
+
+    if not plot_spec.get("align_start_anchor", False):
+        return plot_spec
+    trajectories = plot_spec.get("trajectories", [])
+    target = first_target_point(trajectories)
+    if target is None or not trajectories:
+        return plot_spec
+
+    starts = [np.asarray(trajectory["points"][0], dtype=float) for trajectory in trajectories]
+    distances_to_target = [float(np.linalg.norm(start - target)) for start in starts]
+    anchor_idx = int(np.argmax(distances_to_target))
+    anchor = starts[anchor_idx]
+    anchor_trace_path = trajectories[anchor_idx].get("trace_path")
+
+    for trajectory, start in zip(trajectories, starts):
+        gap = float(np.linalg.norm(start - anchor))
+        if gap < ALIGN_START_MIN_DISTANCE or gap > ALIGN_START_MAX_DISTANCE:
+            continue
+        prefix = smooth_start_prefix(
+            anchor,
+            start,
+            trajectory["points"],
+            count=ALIGN_START_PREFIX_POINTS,
+        )
+        if not prefix:
+            continue
+        trajectory["points"] = prefix + trajectory["points"]
+        for event in trajectory.get("events", []):
+            event["step"] = int(event["step"]) + len(prefix)
+
+    if anchor_trace_path:
+        plot_spec["robot_pose_trace_path"] = anchor_trace_path
+        plot_spec["robot_state_index"] = 0
+    plot_spec["start_anchor_trajectory"] = trajectories[anchor_idx].get("name")
+    plot_spec["start_anchor_point"] = anchor.astype(float).tolist()
+    return plot_spec
+
+
+def close_drawer_for_render(scene_state):
+    import numpy as np
+
+    scene = np.asarray(scene_state, dtype=np.float32).copy()
+    if float(scene[SCENE_DRAWER_INDEX]) <= DRAWER_RENDER_CLOSE_THRESHOLD:
+        scene[SCENE_DRAWER_INDEX] = max(
+            0.0,
+            float(scene[SCENE_DRAWER_INDEX]) - DRAWER_RENDER_CLOSE_OFFSET,
+        )
+    return scene
+
+
+def mean_final_scene_value(trace_paths: list[Path], index: int, default: float) -> float:
+    import numpy as np
+
+    if not trace_paths:
+        return float(default)
+    values = []
+    for path in trace_paths:
+        trace = np.load(path, allow_pickle=True)
+        values.append(float(trace["scene_states"][-1, index]))
+    return float(np.asarray(values, dtype=np.float32).mean())
+
+
+def consolidated_base_prior_final_scene(trace_paths_by_label: dict[str, list[Path]]):
+    import numpy as np
+
+    all_paths = [path for paths in trace_paths_by_label.values() for path in paths]
+    if not all_paths:
+        return None
+    traces = [np.load(path, allow_pickle=True) for path in all_paths]
+    scene = np.asarray(traces[0]["scene_states"][-1], dtype=np.float32).copy()
+    scene[SCENE_SLIDE_INDEX] = mean_final_scene_value(
+        trace_paths_by_label.get("door_left", []),
+        SCENE_SLIDE_INDEX,
+        scene[SCENE_SLIDE_INDEX],
+    )
+    scene[SCENE_DRAWER_INDEX] = mean_final_scene_value(
+        trace_paths_by_label.get("drawer", []),
+        SCENE_DRAWER_INDEX,
+        scene[SCENE_DRAWER_INDEX],
+    )
+    scene[SCENE_BUTTON_INDEX] = mean_final_scene_value(
+        trace_paths_by_label.get("button", []),
+        SCENE_BUTTON_INDEX,
+        scene[SCENE_BUTTON_INDEX],
+    )
+    scene[SCENE_SWITCH_INDEX] = mean_final_scene_value(
+        trace_paths_by_label.get("switch", []),
+        SCENE_SWITCH_INDEX,
+        scene[SCENE_SWITCH_INDEX],
+    )
+    scene[SCENE_LIGHTBULB_INDEX] = 1.0
+    scene[SCENE_LED_INDEX] = 1.0
+    return scene
+
+
 def rollout_trace_path(rollout_dir: Path) -> Path:
     return rollout_dir.expanduser().resolve() / "rollout_trace.npz"
 
 
-def safety_box_from_summary(summary_dir: Path) -> list[dict]:
-    summary_path = summary_dir / "summary.json"
-    if not summary_path.exists():
-        return []
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    box = summary.get("safety_box")
+def safety_box_from_summary(
+    summary_dir: Path,
+    trajectories: list[dict] | None = None,
+    include_margin: bool = True,
+    show_edges: bool = True,
+) -> list[dict]:
+    import numpy as np
+
+    box = None
+    for filename in ("task_summary.json", "summary.json"):
+        summary_path = summary_dir / filename
+        if not summary_path.exists():
+            continue
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        box = summary.get("safety_box")
+        if box:
+            break
+        for rollout in summary.get("rollouts", []):
+            box = rollout.get("safety_metrics", {}).get("safety_box")
+            if box:
+                break
+        if box:
+            break
+    if box is None:
+        for rollout_summary in sorted(summary_dir.glob("rollout_*_seed_*/rollout_summary.json")):
+            summary = json.loads(rollout_summary.read_text(encoding="utf-8"))
+            box = summary.get("safety_metrics", {}).get("safety_box")
+            if box:
+                break
     if not box:
         return []
-    margin = float(box.get("margin", 0.0))
+    margin = float(box.get("margin", 0.0)) if include_margin else 0.0
+    x_min = float(box["x_min"]) - margin
+    x_max = float(box["x_max"]) + margin
+    y_min = float(box["y_min"]) - margin
+    y_max = float(box["y_max"]) + margin
+    z_min = 0.44
+    z_max = 0.70
+    if trajectories:
+        inside_z = []
+        for trajectory in trajectories:
+            points = np.asarray(trajectory.get("points", []), dtype=float)
+            if points.ndim != 2 or points.shape[1] < 3:
+                continue
+            mask = (
+                (points[:, 0] >= x_min)
+                & (points[:, 0] <= x_max)
+                & (points[:, 1] >= y_min)
+                & (points[:, 1] <= y_max)
+            )
+            if np.any(mask):
+                inside_z.append(points[mask, 2])
+        if inside_z:
+            z_max = max(z_min + 0.045, float(np.max(np.concatenate(inside_z))) + 0.025)
     return [
         {
             "name": "safety_box",
-            "x_min": float(box["x_min"]) - margin,
-            "x_max": float(box["x_max"]) + margin,
-            "y_min": float(box["y_min"]) - margin,
-            "y_max": float(box["y_max"]) + margin,
-            "z_min": 0.44,
-            "z_max": 0.63,
-            "color": task_color(2, 5),
-            "alpha": 0.24,
+            "x_min": x_min,
+            "x_max": x_max,
+            "y_min": y_min,
+            "y_max": y_max,
+            "z_min": z_min,
+            "z_max": z_max,
+            "color": unsafe_color(),
+            "alpha": 0.42,
+            "edge_alpha": 0.82,
+            "show_edges": show_edges,
         }
     ]
 
@@ -444,6 +755,32 @@ def selected_batch_rollouts(batch_dir: Path, take_lowest_steps: bool = False, n:
     return sorted(candidates, key=lambda rollout: int(rollout.get("termination_step", horizon)))[:n]
 
 
+def rollout_dir_for_seed(task_dir: Path, seed: int) -> Path:
+    matches = sorted(task_dir.glob(f"rollout_*_seed_{seed:03d}"))
+    if not matches:
+        raise FileNotFoundError(f"No rollout with seed {seed:03d} in {task_dir}")
+    return matches[0]
+
+
+def rollout_horizon(rollout_dir: Path) -> int | None:
+    summary_path = rollout_dir / "rollout_summary.json"
+    if not summary_path.exists():
+        return None
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    step = summary.get("termination_step")
+    return int(step) if step is not None else None
+
+
+def method_trajectory_from_rollout(name: str, rollout_dir: Path) -> tuple[dict, object]:
+    color = method_color()
+    return trajectory_from_rollout(
+        name,
+        rollout_dir,
+        color,
+        event_colors=[color] * 16,
+    )
+
+
 def build_plot_spec(args: argparse.Namespace) -> dict:
     import numpy as np
 
@@ -453,13 +790,87 @@ def build_plot_spec(args: argparse.Namespace) -> dict:
         primary_trace_path = rollout_trace_path(rollout_dirs[0])
         for rollout_dir in rollout_dirs:
             trace_path = rollout_trace_path(rollout_dir)
-            traj, _ = trajectory_from_trace(rollout_dir.name, trace_path, task_color(2, 5))
+            traj, _ = trajectory_from_trace(rollout_dir.name, trace_path, method_color())
             trajectories.append(traj)
         return {
             "primary_trace_path": primary_trace_path,
             "trajectories": trajectories,
             "safety_boxes": safety_box_from_summary(SAFETY_SWITCH_DIR),
         }
+
+    if args.figure_preset == "complex-region":
+        rollout_dirs = [rollout_dir_for_seed(COMPLEX_REGION_DIR, seed) for seed in (2, 4)]
+        flower_rollout_dirs = [rollout_dir_for_seed(FLOWER_REGION_DIR, seed) for seed in (2, 4)]
+        trajectories = []
+        for rollout_dir in rollout_dirs:
+            traj, _ = method_trajectory_from_rollout(rollout_dir.name, rollout_dir)
+            trajectories.append(traj)
+        for rollout_dir in flower_rollout_dirs:
+            traj, _ = trajectory_from_rollout(
+                f"flower_{rollout_dir.name}",
+                rollout_dir,
+                flower_color(),
+                include_events=False,
+                radius_scale=0.92,
+            )
+            trajectories.append(traj)
+        return align_trajectory_starts({
+            "primary_trace_path": rollout_trace_path(rollout_dirs[0]),
+            "trajectories": trajectories,
+            "safety_boxes": safety_box_from_summary(
+                COMPLEX_REGION_DIR,
+                trajectories=trajectories,
+                include_margin=False,
+                show_edges=False,
+            ),
+            "scene_state_index": -1,
+            "robot_state_index": 0,
+            "align_start_anchor": True,
+        })
+
+    if args.figure_preset == "complex-chained":
+        rollout_dir = rollout_dir_for_seed(COMPLEX_CHAINED_DIR, 0)
+        traj, _ = method_trajectory_from_rollout("complex_chained_seed_000", rollout_dir)
+        flower_trace = np.load(rollout_trace_path(FLOWER_CHAINED_ROLLOUT_DIR), allow_pickle=True)
+        flower_horizon = halfway_between_first_two_label_edges(flower_trace, LABEL_IDX["button_pressed"])
+        flower_traj, _ = trajectory_from_rollout(
+            "flower_chained_seed_002",
+            FLOWER_CHAINED_ROLLOUT_DIR,
+            flower_color(),
+            horizon=flower_horizon,
+            include_events=False,
+            radius_scale=0.92,
+        )
+        return align_trajectory_starts({
+            "primary_trace_path": rollout_trace_path(rollout_dir),
+            "trajectories": [traj, flower_traj],
+            "safety_boxes": [],
+            "scene_state_index": -1,
+            "robot_state_index": 0,
+            "align_start_anchor": True,
+        })
+
+    if args.figure_preset == "complex-conditional":
+        rollout_dir = rollout_dir_for_seed(COMPLEX_CONDITIONAL_DIR, 0)
+        traj, _ = method_trajectory_from_rollout("complex_conditional_seed_000", rollout_dir)
+        flower_trace = np.load(rollout_trace_path(FLOWER_CONDITIONAL_ROLLOUT_DIR), allow_pickle=True)
+        flower_horizon = first_label_rising_edge(flower_trace, LABEL_IDX["drawer_closed"])
+        flower_traj, _ = trajectory_from_rollout(
+            "flower_conditional_seed_000",
+            FLOWER_CONDITIONAL_ROLLOUT_DIR,
+            flower_color(),
+            horizon=flower_horizon,
+            include_events=False,
+            radius_scale=0.92,
+        )
+        return align_trajectory_starts({
+            "primary_trace_path": rollout_trace_path(rollout_dir),
+            "trajectories": [traj, flower_traj],
+            "safety_boxes": [],
+            "scene_state_index": -1,
+            "robot_state_index": 0,
+            "align_start_anchor": True,
+        })
 
     if args.figure_preset == "flower":
         trace_path = rollout_trace_path(FLOWER_ROLLOUT_DIR)
@@ -469,19 +880,28 @@ def build_plot_spec(args: argparse.Namespace) -> dict:
     if args.figure_preset == "base-diverse":
         trajectories = []
         primary_trace_path = None
+        selected_trace_paths_by_label = {label: [] for label, *_ in BASE_DIVERSE_BATCHES}
         for label, batch_dir, color_idx, take_lowest in BASE_DIVERSE_BATCHES:
             for rollout in selected_batch_rollouts(batch_dir, take_lowest_steps=take_lowest, n=5):
                 trace_path = Path(rollout["trace"]).resolve()
                 primary_trace_path = primary_trace_path or trace_path
+                selected_trace_paths_by_label[label].append(trace_path)
                 name = f"{label}_seed_{rollout.get('seed')}_step_{rollout.get('termination_step')}"
-                traj, _ = trajectory_from_trace(name, trace_path, task_color(color_idx, 5))
+                traj, _ = trajectory_from_trace(name, trace_path, base_prior_color(color_idx))
                 trajectories.append(traj)
-        return {"primary_trace_path": primary_trace_path, "trajectories": trajectories, "safety_boxes": []}
+        scene_override = consolidated_base_prior_final_scene(selected_trace_paths_by_label)
+        return {
+            "primary_trace_path": primary_trace_path,
+            "trajectories": trajectories,
+            "safety_boxes": [],
+            "scene_state_override": None if scene_override is None else scene_override.astype(float).tolist(),
+            "apply_drawer_close_adjust": False,
+        }
 
     if args.figure_preset == "ordered-stage":
         trace_path = rollout_trace_path(ORDERED_STAGE_DIR)
         trace, points = load_trace_points(trace_path)
-        colors = [task_color(2, 5), task_color(0, 5), task_color(1, 5)]
+        colors = [method_color()] * 16
         events = summary_target_events_for_trace(trace_path, points, colors=colors) or []
         return {
             "primary_trace_path": trace_path,
@@ -508,7 +928,7 @@ def build_plot_spec(args: argparse.Namespace) -> dict:
                 "name": "eef_trajectory",
                 "trace_path": str(trace_path),
                 "points": points.astype(float).tolist(),
-                "color": task_color(0, max(1, len(events))),
+                "color": method_color(),
                 "events": events,
             }
         ],
@@ -528,6 +948,8 @@ def build_manifest(args: argparse.Namespace, output: Path) -> Path:
     plot_spec = build_plot_spec(args)
     primary_trace_path = Path(plot_spec["primary_trace_path"]).resolve()
     primary_trace = np.load(primary_trace_path, allow_pickle=True)
+    robot_pose_trace_path = Path(plot_spec.get("robot_pose_trace_path", primary_trace_path)).resolve()
+    robot_pose_trace = primary_trace if robot_pose_trace_path == primary_trace_path else np.load(robot_pose_trace_path, allow_pickle=True)
 
     ckpt_dict = FileUtils.maybe_dict_from_checkpoint(ckpt_path=str(ENV_CHECKPOINT))
     env = None
@@ -537,7 +959,19 @@ def build_manifest(args: argparse.Namespace, output: Path) -> Path:
             seed=int(np.asarray(primary_trace["rollout_seed"]).item()),
             suppress_output=True,
         )
-        CRU.reset_env_to_scene_robot(env, primary_trace["scene_states"][0], primary_trace["robot_states"][0])
+        scene_state_index = int(plot_spec.get("scene_state_index", -1))
+        robot_state_index = int(plot_spec.get("robot_state_index", 0))
+        if plot_spec.get("scene_state_override") is not None:
+            render_scene_state = np.asarray(plot_spec["scene_state_override"], dtype=np.float32)
+        else:
+            render_scene_state = np.asarray(primary_trace["scene_states"][scene_state_index], dtype=np.float32)
+        if plot_spec.get("apply_drawer_close_adjust", True):
+            render_scene_state = close_drawer_for_render(render_scene_state)
+        CRU.reset_env_to_scene_robot(
+            env,
+            render_scene_state,
+            robot_pose_trace["robot_states"][robot_state_index],
+        )
         visual_shapes = export_visual_shapes(env, p, CRU)
     finally:
         CRU.close_env_quietly(env)
@@ -551,9 +985,16 @@ def build_manifest(args: argparse.Namespace, output: Path) -> Path:
         "figure_preset": args.figure_preset,
         "rollout_dir": str(primary_trace_path.parent),
         "trace_path": str(primary_trace_path),
+        "robot_pose_trace_path": str(robot_pose_trace_path),
         "env_checkpoint": str(ENV_CHECKPOINT),
         "view": args.view,
         "camera": build_camera_config(args),
+        "scene_state_index": int(plot_spec.get("scene_state_index", -1)),
+        "scene_state_override": plot_spec.get("scene_state_override"),
+        "render_scene_state": render_scene_state.astype(float).tolist(),
+        "robot_state_index": int(plot_spec.get("robot_state_index", 0)),
+        "start_anchor_trajectory": plot_spec.get("start_anchor_trajectory"),
+        "start_anchor_point": plot_spec.get("start_anchor_point"),
         "eef_xyz": first_points,
         "events": first_events,
         "trajectories": trajectories,
@@ -922,6 +1363,8 @@ def import_scene_objects(manifest: dict, materials: dict) -> list:
         link = shape["link_name"].lower()
         if "plane" in body or "plane" in link:
             continue
+        if body in {"block_red", "block_blue", "block_pink"}:
+            continue
         if "gripper_cam" in body or "gripper_cam" in link:
             continue
         imported = import_mesh(shape) if shape["geometry_type"] == GEOM_MESH and shape.get("mesh_path") else create_primitive(shape)
@@ -1007,8 +1450,10 @@ def add_trajectory(manifest: dict) -> None:
     for traj_idx, trajectory in enumerate(trajectories):
         points = trajectory["points"]
         events = sorted(trajectory.get("events", []), key=lambda event: event["step"])
-        radius = float(trajectory.get("radius", default_radius))
-        halo_radius = float(trajectory.get("halo_radius", default_halo_radius))
+        radius_scale = float(trajectory.get("radius_scale", 1.0))
+        halo_radius_scale = float(trajectory.get("halo_radius_scale", radius_scale))
+        radius = float(trajectory.get("radius", default_radius * radius_scale))
+        halo_radius = float(trajectory.get("halo_radius", default_halo_radius * halo_radius_scale))
         base_color = tuple(trajectory.get("color", [0.95, 0.16, 0.42, 1.0]))
         prefix = f"trajectory_{traj_idx:02d}_{trajectory.get('name', 'trace')}"
         if not events:
@@ -1080,6 +1525,29 @@ def add_safety_boxes(manifest: dict) -> None:
         cube.dimensions = dimensions
         bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
         cube.data.materials.append(mat)
+
+        if not bool(box.get("show_edges", True)):
+            continue
+
+        edge_mat = make_principled(
+            f"{box.get('name', 'safety_box')}_edge_material",
+            color,
+            0.35,
+            0.0,
+            alpha=float(box.get("edge_alpha", 0.82)),
+            emission=color,
+            emission_strength=0.16,
+            specular_ior_level=0.0,
+        )
+        bpy.ops.mesh.primitive_cube_add(size=1, location=location)
+        edge_cube = bpy.context.object
+        edge_cube.name = f"{box.get('name', 'safety_box')}_edge"
+        edge_cube.dimensions = dimensions
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        edge_cube.data.materials.append(edge_mat)
+        wire = edge_cube.modifiers.new(name="visible_edges", type="WIREFRAME")
+        wire.thickness = float(box.get("edge_thickness", 0.006))
+        wire.use_even_offset = True
 
 
 def add_lighting(manifest: dict) -> None:
