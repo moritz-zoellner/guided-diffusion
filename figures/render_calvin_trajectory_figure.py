@@ -4,6 +4,8 @@ import argparse
 import json
 import math
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +20,17 @@ ENV_CHECKPOINT = REPO_ROOT / "outputs/calvin/base_policy/calvin_D_base_dp/202605
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs/paper_plots/5-step-figure"
 TEXTURE_DIR = REPO_ROOT / "assets/calvin_render_textures"
 LOCAL_BLENDER = REPO_ROOT / "tools/blender-4.2.0-linux-x64/blender"
+SAVED_BLEND_DIR = REPO_ROOT / "outputs/paper_plots/editable_blender_panels"
+SAVED_BLEND_PANELS = {
+    "long-horizon": "long_horizon.blend",
+    "complex-chained": "long_horizon.blend",
+    "conditional": "conditional.blend",
+    "complex-conditional": "conditional.blend",
+    "safety": "safety_constraint.blend",
+    "complex-region": "safety_constraint.blend",
+    "behavior-prior": "behavior_prior.blend",
+    "base-diverse": "behavior_prior.blend",
+}
 OUR_BLUE_HEX = "#275fca"
 UNSAFE_RED_HEX = "#b85f5a"
 FLOWER_GREEN_HEX = "#4e8b68"
@@ -209,7 +222,8 @@ def parse_driver_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Render a CALVIN rollout as a publication-style Blender figure. "
-            "Run this with pixi/python, not directly with blender."
+            "Run this with pixi/python, not directly with blender. "
+            "Use --blend or --blend-panel to render an existing saved .blend without CALVIN/PyBullet inputs."
         )
     )
     parser.add_argument("--rollout-dir", type=Path, default=DEFAULT_ROLLOUT_DIR)
@@ -230,7 +244,28 @@ def parse_driver_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--output", type=Path, default=None, help="Optional exact output PNG path. Must not already exist.")
-    parser.add_argument("--blender", default=default_blender_path())
+    parser.add_argument(
+        "--blender",
+        default=default_blender_path(),
+        help='Blender executable path or command prefix, e.g. "flatpak run org.blender.Blender".',
+    )
+    parser.add_argument(
+        "--blend",
+        type=Path,
+        default=None,
+        help="Render an existing saved .blend file instead of rebuilding the scene from CALVIN rollout traces.",
+    )
+    parser.add_argument(
+        "--blend-panel",
+        choices=sorted(SAVED_BLEND_PANELS),
+        default=None,
+        help="Render one of the downloaded editable Blender panels without CALVIN/PyBullet inputs.",
+    )
+    parser.add_argument(
+        "--list-blends",
+        action="store_true",
+        help="List saved .blend panel files found in the expected download locations and exit.",
+    )
     parser.add_argument("--samples", type=int, default=128)
     parser.add_argument("--resolution-scale", type=float, default=1.0)
     parser.add_argument("--view", choices=sorted(CAMERA_PRESETS), default="dynaguide_side")
@@ -263,6 +298,132 @@ def parse_driver_args() -> argparse.Namespace:
     parser.add_argument("--transition-steps", type=int, default=0)
     parser.add_argument("--event-radius", type=float, default=0.0072)
     return parser.parse_args()
+
+
+def found_saved_blends() -> dict[str, Path]:
+    found = {}
+    for panel, filename in SAVED_BLEND_PANELS.items():
+        if panel in found:
+            continue
+        candidate = SAVED_BLEND_DIR / filename
+        if candidate.exists():
+            found[panel] = candidate
+    return found
+
+
+def print_saved_blends() -> None:
+    found = found_saved_blends()
+    if not found:
+        print(f"No saved .blend panels found in: {SAVED_BLEND_DIR}")
+        return
+    print("Saved .blend panels:")
+    for panel in sorted(found):
+        print(f"  {panel}: {found[panel]}")
+
+
+def resolve_saved_blend(args: argparse.Namespace) -> Path:
+    if args.blend is not None and args.blend_panel is not None:
+        raise ValueError("Use either --blend or --blend-panel, not both.")
+    if args.blend is not None:
+        blend_path = args.blend.expanduser().resolve()
+        if not blend_path.exists():
+            raise FileNotFoundError(f"Saved Blender file not found: {blend_path}")
+        return blend_path
+    if args.blend_panel is None:
+        raise ValueError("No saved Blender file requested.")
+    filename = SAVED_BLEND_PANELS[args.blend_panel]
+    blend_path = SAVED_BLEND_DIR / filename
+    if blend_path.exists():
+        return blend_path.resolve()
+    raise FileNotFoundError(f"Could not find .blend panel '{args.blend_panel}': {blend_path}")
+
+
+def resolve_blender_command(blender: str) -> list[str]:
+    parts = shlex.split(str(blender))
+    if not parts:
+        raise ValueError("Empty Blender executable command.")
+
+    blender_path = Path(parts[0]).expanduser()
+    if blender_path.is_absolute() or blender_path.parent != Path("."):
+        if blender_path.exists():
+            return [str(blender_path.resolve()), *parts[1:]]
+        raise FileNotFoundError(
+            "Blender executable not found: "
+            f"{blender_path}\nInstall Blender, extract it under tools/blender-4.2.0-linux-x64, "
+            "or pass --blender /path/to/blender."
+        )
+    resolved = shutil.which(parts[0])
+    if resolved is not None:
+        return [resolved, *parts[1:]]
+    raise FileNotFoundError(
+        f"Blender executable '{parts[0]}' was not found on PATH, and the repo-local Blender binary is missing at "
+        f"{LOCAL_BLENDER}. Install Blender or pass --blender /path/to/blender. "
+        'Flatpak installs can be passed as --blender "flatpak run org.blender.Blender".'
+    )
+
+
+def render_saved_blend(args: argparse.Namespace, blend_path: Path, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    expression_lines = [
+        "import bpy",
+        f"output = {str(output)!r}",
+        "scene = bpy.context.scene",
+        "scene.render.engine = 'CYCLES'",
+        f"scene.cycles.samples = {int(args.samples)}",
+        "scene.cycles.use_denoising = True",
+        "scene.render.filepath = output",
+    ]
+    if args.resolution is not None:
+        expression_lines.extend(
+            [
+                f"scene.render.resolution_x = {int(args.resolution[0])}",
+                f"scene.render.resolution_y = {int(args.resolution[1])}",
+                "scene.render.resolution_percentage = 100",
+            ]
+        )
+    elif args.resolution_scale != 1.0:
+        expression_lines.append(f"scene.render.resolution_percentage = {max(1, int(round(args.resolution_scale * 100.0)))}")
+    expression_lines.append("bpy.ops.render.render(write_still=True)")
+    blender_cmd = resolve_blender_command(args.blender)
+    cmd = [
+        *blender_cmd,
+        "-b",
+        str(blend_path),
+        "--python-expr",
+        "\n".join(expression_lines),
+    ]
+    print("Rendering saved Blender file:")
+    print(" ".join(blender_cmd + ["-b", str(blend_path), "--python-expr", "<render expression>"]), flush=True)
+    subprocess.run(cmd, check=True)
+
+
+def format_command_for_error(cmd) -> str:
+    if not isinstance(cmd, (list, tuple)):
+        return str(cmd)
+    parts = [str(part) for part in cmd]
+    if "--python-expr" in parts:
+        idx = parts.index("--python-expr")
+        parts = parts[: idx + 1] + ["<render expression>"]
+    return " ".join(parts)
+
+
+def validate_calvin_driver_inputs(args: argparse.Namespace) -> None:
+    if ENV_CHECKPOINT.exists():
+        return
+    found = found_saved_blends()
+    hint = ""
+    if found:
+        first_panel = sorted(found)[0]
+        hint = (
+            "\nSaved .blend panels are available, so you can bypass CALVIN/PyBullet with e.g.:\n"
+            f"  python figures/render_calvin_trajectory_figure.py --blend-panel {first_panel} --output outputs/{first_panel}.png"
+        )
+    raise FileNotFoundError(
+        "Cannot rebuild a CALVIN scene because the environment checkpoint is missing:\n"
+        f"  {ENV_CHECKPOINT}\n"
+        "Rebuilding from rollout traces also requires pybullet, robomimic, and the referenced outputs/calvin run data."
+        f"{hint}"
+    )
 
 
 def build_camera_config(args: argparse.Namespace) -> dict:
@@ -1080,8 +1241,9 @@ def build_manifest(args: argparse.Namespace, output: Path) -> Path:
 
 
 def run_blender(args: argparse.Namespace, manifest_path: Path, output: Path) -> None:
+    blender_cmd = resolve_blender_command(args.blender)
     cmd = [
-        args.blender,
+        *blender_cmd,
         "-b",
         "--python",
         str(Path(__file__).resolve()),
@@ -1105,10 +1267,19 @@ def run_blender(args: argparse.Namespace, manifest_path: Path, output: Path) -> 
 
 def driver_main() -> None:
     args = parse_driver_args()
+    if args.list_blends:
+        print_saved_blends()
+        return
     output = args.output.expanduser().resolve() if args.output is not None else next_versioned_output(args.output_dir.expanduser().resolve())
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite existing image: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
+    if args.blend is not None or args.blend_panel is not None:
+        blend_path = resolve_saved_blend(args)
+        render_saved_blend(args, blend_path, output)
+        print(f"Output: {output}")
+        return
+    validate_calvin_driver_inputs(args)
     manifest_path = build_manifest(args, output)
     if not args.export_only:
         run_blender(args, manifest_path, output)
@@ -1759,4 +1930,14 @@ if __name__ == "__main__":
     if is_blender_render_mode():
         blender_render_main()
     else:
-        driver_main()
+        try:
+            driver_main()
+        except (FileNotFoundError, FileExistsError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"Error: command failed with exit code {exc.returncode}: {format_command_for_error(exc.cmd)}",
+                file=sys.stderr,
+            )
+            sys.exit(exc.returncode)

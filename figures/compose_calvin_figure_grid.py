@@ -3,19 +3,21 @@ from __future__ import annotations
 import argparse
 import copy
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from textwrap import fill
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
+from matplotlib.textpath import TextPath
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -23,29 +25,33 @@ LATEX_TEXTWIDTH_PT = 397.48499
 PT_PER_IN = 72.27
 TEXTWIDTH_IN = LATEX_TEXTWIDTH_PT / PT_PER_IN
 FIG_DPI = 300
-DEFAULT_FIGSIZE = (TEXTWIDTH_IN, 4.70)
+DEFAULT_FIGURE_WIDTH = TEXTWIDTH_IN
 OUTPUT_STEM = "calvin_figure_grid"
 RENDER_SCRIPT = REPO_ROOT / "figures/render_calvin_trajectory_figure.py"
 LOCAL_BLENDER = REPO_ROOT / "tools/blender-4.2.0-linux-x64/blender"
 
 # Layout knobs. These can also be overridden from the command line.
-PANEL_COLUMN_WSPACE = 0.075
-PANEL_SQUARE_SCALE = 0.50
-ROW_SEPARATOR_GAP_ABOVE = 0.10
-ROW_SEPARATOR_GAP_BELOW = 0.12
-ROW_SEPARATOR_SIDE_INSET = 0.02
+PAGE_SIDE_MARGIN_IN = 0.02
+PANEL_COLUMN_WSPACE = 0.06
+PANEL_SQUARE_SCALE = 1.
+TITLE_ROW_HEIGHT_IN = 0.16
+SUBTITLE_ROW_HEIGHT_IN = 0.32
 ROW_SEPARATOR_COLOR = "black"
-ADD_BOTTOM_COLUMN_SEPARATOR = True
-BOTTOM_COLUMN_SEPARATOR_TOP_INSET = 0.02
-BOTTOM_COLUMN_SEPARATOR_BOTTOM_INSET = 0.02
+ADD_GROUP_SEPARATOR = True
+GROUP_SEPARATOR_AFTER_COL = 0
+GROUP_SEPARATOR_GAP_MULTIPLIER = 2.0
+GROUP_SEPARATOR_TOP_INSET = 0.04
+GROUP_SEPARATOR_BOTTOM_INSET = 0.1
 ADD_PANEL_FRAMES = True
-LINE_THICKNESS = 0.9
-LEGEND_HEIGHT = 0.16
+LINE_THICKNESS = 0.91
+LEGEND_GAP_ABOVE_SCALE = 0.16
+LEGEND_BOTTOM_MARGIN_IN = 0.02
 LEGEND_LINEWIDTH = 1.7
 LEGEND_FRAME_LINEWIDTH = 0.45
 TITLE_FONTSIZE = 7.0
-SUBTITLE_FONTSIZE = 4.8
-TITLE_WEIGHT = "bold"
+SUBTITLE_FONTSIZE = 5.5
+TITLE_BOLD = False 
+TITLE_WEIGHT = "bold" if TITLE_BOLD else "normal"
 OUR_BLUE = "#275fca"
 FLOWER_GREEN = "#4e8b68"
 BOOTSTRAP_CAMERA_ARGS = [
@@ -69,58 +75,11 @@ QUALITY_PRESETS = {
 PANEL_ROWS = [
     [
         {
-            "path": "outputs/paper_plots/complex_chained/complex_chained_v5.png",
-            "render": {
-                "figure_preset": "complex-chained",
-                "output_dir": "outputs/paper_plots/complex_chained",
-                "blend_path": "outputs/paper_plots/editable_blender_panels/long_horizon.blend",
-            },
-            "title": "Long-horizon Tasks",
-            "subtitle": "Press the button, then move the sliding door right, then turn off the lightbulb with the switch, then close the drawer.",
-        },
-        {
-            "path": "outputs/paper_plots/complex_conditional/complex_conditional_v5.png",
-            "render": {
-                "figure_preset": "complex-conditional",
-                "output_dir": "outputs/paper_plots/complex_conditional",
-                "blend_path": "outputs/paper_plots/editable_blender_panels/conditional.blend",
-            },
-            "title": "Conditional Execution",
-            "subtitle": "Close the drawer, but only once the button and the switch are turned off.",
-        },
-        {
-            "path": "outputs/paper_plots/complex_region_safety/complex_region_safety_v4.png",
-            "render": {
-                "figure_preset": "complex-region",
-                "output_dir": "outputs/paper_plots/complex_region_safety",
-                "blend_path": "outputs/paper_plots/editable_blender_panels/safety_constraint.blend",
-            },
-            "title": "Safety Constraints",
-            "subtitle": "Turn off the lightbulb with the switch while keeping the robot arm out of the unsafe region.",
-        },
-    ],
-    [
-        {
-            "path": "outputs/paper_plots/cyclic_repetition/cyclic_repetition_v1.png",
-            "render": {
-                "figure_preset": "cyclic",
-                "output_dir": "outputs/paper_plots/cyclic_repetition",
-                "blend_path": "outputs/paper_plots/editable_blender_panels/cyclic.blend",
-            },
-            "title": "Cyclic Repetition",
-            "subtitle": "Repeatedly pick up the Cheez-Its, then pour in the left and the right bowl, and then put them down again.",
-        },
-        {
-            "placeholder": True,
-            "title": "Real-world Safety",
-            "subtitle": "Pick up the Cheez-Its and pour them into the left bowl while avoiding the marked region.",
-        },
-        {
-            "path": "outputs/paper_plots/base_policy_prior/base_policy_prior_v3.png",
+            "path": "outputs/paper_plots/calvin_individual_panels_export/png/behavior_prior.png",
             "render": {
                 "figure_preset": "base-diverse",
-                "output_dir": "outputs/paper_plots/base_policy_prior",
-                "blend_path": "outputs/paper_plots/editable_blender_panels/behavior_prior.blend",
+                "output_dir": "outputs/paper_plots/calvin_individual_panels_export/png",
+                "blend_path": "outputs/paper_plots/calvin_individual_panels_export/blend/behavior_prior.blend",
                 "extra_args": [
                     "--trajectory-radius",
                     "0.0022",
@@ -129,8 +88,37 @@ PANEL_ROWS = [
                 ],
             },
             "title": "Behavior Prior",
-            "subtitle": "Unconditioned diffusion policy",
+            "subtitle": "Unconditioned, Multimodal\nDiffusion Policy",
             "quote_subtitle": False,
+        },
+        {
+            "path": "outputs/paper_plots/calvin_individual_panels_export/png/conditional.png",
+            "render": {
+                "figure_preset": "complex-conditional",
+                "output_dir": "outputs/paper_plots/calvin_individual_panels_export/png",
+                "blend_path": "outputs/paper_plots/calvin_individual_panels_export/blend/conditional.blend",
+            },
+            "title": "Conditional Execution",
+            "subtitle": "Close the drawer, but only once the button and the switch are off.",
+        },
+        {
+            "path": "outputs/paper_plots/calvin_individual_panels_export/png/safety_constraint.png",
+            "render": {
+                "figure_preset": "complex-region",
+                "output_dir": "outputs/paper_plots/calvin_individual_panels_export/png",
+                "blend_path": "outputs/paper_plots/calvin_individual_panels_export/blend/safety_constraint.blend",
+            },
+            "title": "Safety Constraints",
+            "subtitle": "Turn off the switch while keeping the robot arm out of the unsafe region.",
+        },
+        {
+            "path": "outputs/paper_plots/calvin_individual_panels_export/png/cyclic_repetition.png",
+            "render": {
+                "output_dir": "outputs/paper_plots/calvin_individual_panels_export/png",
+                "blend_path": "outputs/paper_plots/calvin_individual_panels_export/blend/cyclic.blend",
+            },
+            "title": "Cyclic Repetition",
+            "subtitle": "Repeatedly press the button, flip the switch, \nand move the drawer.",
         },
     ],
 ]
@@ -176,45 +164,73 @@ def fixed_output(output_dir: Path, stem: str, suffix: str) -> Path:
     return output_dir / f"{stem}.{suffix}"
 
 
+def add_boolean_arg(
+    parser: argparse.ArgumentParser,
+    name: str,
+    *,
+    default: bool,
+    dest: str | None = None,
+    help: str | None = None,
+) -> None:
+    dest = dest or name.replace("-", "_")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(f"--{name}", dest=dest, action="store_true", help=help)
+    group.add_argument(f"--no-{name}", dest=dest, action="store_false", help=argparse.SUPPRESS)
+    parser.set_defaults(**{dest: default})
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compose CALVIN render PNGs into a paper figure grid.")
     parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "outputs/paper_plots/calvin_figure_grid")
     parser.add_argument("--output-stem", default=OUTPUT_STEM)
     parser.add_argument("--versioned", action="store_true", help="Write calvin_figure_grid_vN instead of overwriting the fixed output name.")
     parser.add_argument("--dpi", type=int, default=FIG_DPI)
-    parser.add_argument("--figsize", nargs=2, type=float, default=DEFAULT_FIGSIZE, metavar=("W", "H"))
+    parser.add_argument(
+        "--figsize",
+        nargs="+",
+        type=float,
+        default=[DEFAULT_FIGURE_WIDTH],
+        metavar="INCH",
+        help=(
+            "Figure size in inches. Pass WIDTH for automatic height from the square panel geometry, "
+            "or WIDTH HEIGHT for an explicit fixed size."
+        ),
+    )
     parser.add_argument("--column-wspace", type=float, default=PANEL_COLUMN_WSPACE)
     parser.add_argument("--panel-square-scale", type=float, default=PANEL_SQUARE_SCALE)
-    parser.add_argument("--row-separator-gap-above", type=float, default=ROW_SEPARATOR_GAP_ABOVE)
-    parser.add_argument("--row-separator-gap-below", type=float, default=ROW_SEPARATOR_GAP_BELOW)
-    parser.add_argument("--row-separator-side-inset", type=float, default=ROW_SEPARATOR_SIDE_INSET)
-    parser.add_argument("--add-bottom-column-separator", action=argparse.BooleanOptionalAction, default=ADD_BOTTOM_COLUMN_SEPARATOR)
+    add_boolean_arg(parser, "add-bottom-column-separator", default=ADD_GROUP_SEPARATOR, dest="add_group_separator", help=argparse.SUPPRESS)
     parser.add_argument(
         "--bottom-column-separator-top-inset",
         type=float,
-        default=BOTTOM_COLUMN_SEPARATOR_TOP_INSET,
-        help="Inset for the bottom-row vertical separator as a fraction of the bottom row height.",
+        default=GROUP_SEPARATOR_TOP_INSET,
+        dest="group_separator_top_inset",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--bottom-column-separator-bottom-inset",
         type=float,
-        default=BOTTOM_COLUMN_SEPARATOR_BOTTOM_INSET,
-        help="Inset for the bottom-row vertical separator as a fraction of the bottom row height.",
+        default=GROUP_SEPARATOR_BOTTOM_INSET,
+        dest="group_separator_bottom_inset",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--line-thickness", type=float, default=LINE_THICKNESS, help="Shared linewidth for panel frames and separators.")
-    parser.add_argument("--add-panel-frames", action=argparse.BooleanOptionalAction, default=ADD_PANEL_FRAMES)
-    parser.add_argument("--legend-height", type=float, default=LEGEND_HEIGHT)
+    add_boolean_arg(parser, "add-panel-frames", default=ADD_PANEL_FRAMES)
+    parser.add_argument("--legend-height", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--title-fontsize", type=float, default=TITLE_FONTSIZE)
     parser.add_argument("--subtitle-fontsize", type=float, default=SUBTITLE_FONTSIZE)
     parser.add_argument("--no-titles", action="store_true")
-    parser.add_argument("--rerender-panels", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument(
-        "--rebuild-blends",
-        action=argparse.BooleanOptionalAction,
+    add_boolean_arg(parser, "rerender-panels", default=False)
+    add_boolean_arg(
+        parser,
+        "rebuild-blends",
         default=False,
         help="Recreate editable Blender source files from CALVIN before rendering. This overwrites those editable .blend files.",
     )
-    parser.add_argument("--blender", type=Path, default=LOCAL_BLENDER if LOCAL_BLENDER.exists() else Path("blender"))
+    parser.add_argument(
+        "--blender",
+        default=str(LOCAL_BLENDER if LOCAL_BLENDER.exists() else "blender"),
+        help='Blender executable path or command prefix, e.g. "flatpak run org.blender.Blender".',
+    )
     parser.add_argument("--quality", type=int, choices=sorted(QUALITY_PRESETS), default=0)
     parser.add_argument(
         "--render-square-size",
@@ -265,6 +281,127 @@ def relative_to_repo(path: Path) -> str:
         return str(path.resolve())
 
 
+def image_scale(args: argparse.Namespace) -> float:
+    return min(max(args.panel_square_scale, 0.05), 1.0)
+
+
+def legend_handles() -> list[Line2D]:
+    return [
+        Line2D([0], [0], color=OUR_BLUE, linewidth=LEGEND_LINEWIDTH, label=r"hint$^2$"),
+        Line2D(
+            [0],
+            [0],
+            color=FLOWER_GREEN,
+            linewidth=LEGEND_LINEWIDTH,
+            label="Vision-Language-Action Policy (FLOWER)",
+        ),
+    ]
+
+
+def add_legend_to_axis(ax):
+    legend = ax.legend(
+        handles=legend_handles(),
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.0),
+        ncol=2,
+        frameon=True,
+        fancybox=True,
+        framealpha=1.0,
+        edgecolor="#d4d4d4",
+        facecolor="white",
+        handlelength=1.8,
+        columnspacing=1.2,
+        borderpad=0.35,
+        borderaxespad=0.0,
+    )
+    legend.get_frame().set_linewidth(LEGEND_FRAME_LINEWIDTH)
+    return legend
+
+
+def measure_legend_height(width: float, dpi: int) -> float:
+    measure_fig = plt.figure(figsize=(width, 0.5), dpi=dpi, facecolor="white")
+    ax = measure_fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_axis_off()
+    legend = add_legend_to_axis(ax)
+    measure_fig.canvas.draw()
+    height = legend.get_window_extent(measure_fig.canvas.get_renderer()).height / dpi
+    plt.close(measure_fig)
+    return height
+
+
+def panel_layout(args: argparse.Namespace, width: float) -> dict[str, float]:
+    ncols = len(PANEL_ROWS[0])
+    side_margin = min(max(PAGE_SIDE_MARGIN_IN, 0.0), max(width * 0.45, 0.0))
+    content_width = width - 2.0 * side_margin
+    column_wspace = max(float(args.column_wspace), 0.0)
+    gap_multipliers = [1.0] * max(ncols - 1, 0)
+    if 0 <= GROUP_SEPARATOR_AFTER_COL < len(gap_multipliers):
+        gap_multipliers[GROUP_SEPARATOR_AFTER_COL] = max(GROUP_SEPARATOR_GAP_MULTIPLIER, 0.0)
+    panel_width = content_width / (ncols + sum(gap_multipliers) * column_wspace)
+    column_gap = panel_width * column_wspace
+    column_gaps = [column_gap * multiplier for multiplier in gap_multipliers]
+    square_size = panel_width * image_scale(args)
+    title_height = max(TITLE_ROW_HEIGHT_IN, 1e-6)
+    subtitle_height = max(SUBTITLE_ROW_HEIGHT_IN, 1e-6)
+    panel_height = title_height + square_size + subtitle_height
+    legend_content_height = measure_legend_height(width, args.dpi)
+    legend_gap_scale = LEGEND_GAP_ABOVE_SCALE if args.legend_height is None else args.legend_height
+    legend_gap_above = max(legend_gap_scale, 0.0) * legend_content_height
+    legend_bottom_margin = max(LEGEND_BOTTOM_MARGIN_IN, 0.0)
+    legend_height = legend_bottom_margin + legend_content_height + legend_gap_above
+    figure_height = panel_height + legend_height
+    return {
+        "panel_width": panel_width,
+        "column_gap": column_gap,
+        "column_gaps": column_gaps,
+        "side_margin": side_margin,
+        "content_width": content_width,
+        "square_size": square_size,
+        "title_height": title_height,
+        "subtitle_height": subtitle_height,
+        "panel_height": panel_height,
+        "legend_content_height": legend_content_height,
+        "legend_gap_above": legend_gap_above,
+        "legend_bottom_margin": legend_bottom_margin,
+        "legend_height": legend_height,
+        "figure_height": figure_height,
+    }
+
+
+def resolve_figsize(args: argparse.Namespace, layout: dict[str, float] | None = None) -> tuple[float, float]:
+    if len(args.figsize) not in {1, 2}:
+        raise ValueError("--figsize expects WIDTH or WIDTH HEIGHT.")
+    width = float(args.figsize[0])
+    if width <= 0.0:
+        raise ValueError("--figsize WIDTH must be positive.")
+    if len(args.figsize) == 2:
+        height = float(args.figsize[1])
+        if height <= 0.0:
+            raise ValueError("--figsize HEIGHT must be positive.")
+        return width, height
+
+    layout = layout or panel_layout(args, width)
+    return width, layout["figure_height"]
+
+
+def resolve_blender_command(blender: str) -> list[str]:
+    parts = shlex.split(str(blender))
+    if not parts:
+        raise ValueError("Empty Blender executable command.")
+    blender_path = Path(parts[0]).expanduser()
+    if blender_path.is_absolute() or blender_path.parent != Path("."):
+        if blender_path.exists():
+            return [str(blender_path.resolve()), *parts[1:]]
+        raise FileNotFoundError(f"Blender executable not found: {blender_path}")
+    resolved = shutil.which(parts[0])
+    if resolved is not None:
+        return [resolved, *parts[1:]]
+    raise FileNotFoundError(
+        f"Blender executable '{parts[0]}' was not found on PATH. "
+        'Flatpak installs can be passed as --blender "flatpak run org.blender.Blender".'
+    )
+
+
 def render_panel_from_calvin(panel: dict, args: argparse.Namespace, output: Path) -> Path:
     spec = panel.get("render")
     quality = QUALITY_PRESETS[args.quality]
@@ -280,6 +417,8 @@ def render_panel_from_calvin(panel: dict, args: argparse.Namespace, output: Path
         str(output),
         "--samples",
         str(quality["samples"]),
+        "--blender",
+        str(args.blender),
         "--resolution",
         str(square_size),
         str(square_size),
@@ -309,15 +448,16 @@ def render_saved_blend(blend_path: Path, output: Path, args: argparse.Namespace)
             "bpy.ops.render.render(write_still=True)",
         ]
     )
+    blender_cmd = resolve_blender_command(args.blender)
     cmd = [
-        str(args.blender),
+        *blender_cmd,
         "-b",
         str(blend_path),
         "--python-expr",
         expression,
     ]
     print("Rendering saved Blender panel:")
-    print(" ".join(cmd[:3] + ["--python-expr", "<render expression>"]))
+    print(" ".join(blender_cmd + ["-b", str(blend_path), "--python-expr", "<render expression>"]))
     subprocess.run(cmd, check=True)
     return output
 
@@ -334,6 +474,8 @@ def render_panel(panel: dict, args: argparse.Namespace) -> Path | None:
         return render_panel_from_calvin(panel, args, output)
 
     if args.rebuild_blends or not blend_path.exists():
+        if "figure_preset" not in spec:
+            raise RuntimeError(f"Cannot rebuild saved-only Blender panel: {blend_path}")
         rendered = render_panel_from_calvin(panel, args, output)
         built_blend = rendered.with_suffix(".blend")
         if not built_blend.exists():
@@ -397,10 +539,48 @@ def add_image_or_placeholder(ax, panel: dict, args: argparse.Namespace) -> None:
     add_panel_frame(ax, args)
 
 
-def add_text(ax, text: str, fontsize: float, weight: str = "normal", wrap: int | None = None) -> None:
+def text_width_in(text: str, fontsize: float, weight: str = "normal", renderer=None, dpi: float = FIG_DPI) -> float:
+    if not text:
+        return 0.0
+    prop = FontProperties(family=PAPER_FONT["font.family"], size=fontsize, weight=weight)
+    if renderer is not None:
+        width_px, _, _ = renderer.get_text_width_height_descent(text, prop, ismath=False)
+        return float(width_px) / float(dpi)
+    return float(TextPath((0.0, 0.0), text, prop=prop, size=fontsize).get_extents().width) / PT_PER_IN
+
+
+def wrap_text_to_width(text: str, max_width_in: float, fontsize: float, weight: str = "normal", renderer=None, dpi: float = FIG_DPI) -> str:
+    if max_width_in <= 0.0:
+        return text
+    lines = []
+    for paragraph in text.splitlines():
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+        line = words[0]
+        for word in words[1:]:
+            candidate = f"{line} {word}"
+            if text_width_in(candidate, fontsize, weight, renderer=renderer, dpi=dpi) <= max_width_in:
+                line = candidate
+            else:
+                lines.append(line)
+                line = word
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def add_text(
+    ax,
+    text: str,
+    fontsize: float,
+    weight: str = "normal",
+    max_width_in: float | None = None,
+) -> None:
     ax.set_axis_off()
-    if wrap is not None:
-        text = fill(text, width=wrap)
+    if max_width_in is not None:
+        renderer = ax.figure.canvas.get_renderer()
+        text = wrap_text_to_width(text, max_width_in, fontsize, weight, renderer=renderer, dpi=ax.figure.dpi)
     ax.text(
         0.5,
         0.5,
@@ -413,6 +593,11 @@ def add_text(ax, text: str, fontsize: float, weight: str = "normal", wrap: int |
     )
 
 
+def add_axes_in_inches(fig, x: float, y: float, width: float, height: float, figsize: tuple[float, float]):
+    fig_width, fig_height = figsize
+    return fig.add_axes([x / fig_width, y / fig_height, width / fig_width, height / fig_height])
+
+
 def formatted_subtitle(panel: dict) -> str:
     subtitle = panel["subtitle"]
     if panel.get("quote_subtitle", True):
@@ -420,72 +605,71 @@ def formatted_subtitle(panel: dict) -> str:
     return subtitle
 
 
-def add_panel(fig, outer_slot, panel: dict, args: argparse.Namespace, show_title: bool) -> None:
-    subgrid = outer_slot.subgridspec(
-        nrows=3,
-        ncols=1,
-        height_ratios=[0.11, 1.0, 0.28],
-        hspace=0.0,
-    )
+def add_panel(
+    fig,
+    panel: dict,
+    args: argparse.Namespace,
+    show_title: bool,
+    layout: dict[str, float],
+    figsize: tuple[float, float],
+    x: float,
+    y: float,
+    subtitle_x: float,
+    subtitle_width: float,
+) -> None:
+    panel_width = layout["panel_width"]
+    square_size = layout["square_size"]
+    subtitle_height = layout["subtitle_height"]
+    title_height = layout["title_height"]
+
+    subtitle_y = y
+    image_y = subtitle_y + subtitle_height
+    title_y = image_y + square_size
+    image_x = x + 0.5 * (panel_width - square_size)
+
     if show_title:
         add_text(
-            fig.add_subplot(subgrid[0, 0]),
+            add_axes_in_inches(fig, x, title_y, panel_width, title_height, figsize),
             panel["title"],
             fontsize=args.title_fontsize,
             weight=TITLE_WEIGHT,
         )
     else:
-        fig.add_subplot(subgrid[0, 0]).set_axis_off()
-    image_scale = min(max(args.panel_square_scale, 0.05), 1.0)
-    image_margin = (1.0 - image_scale) * 0.5
-    image_grid = subgrid[1, 0].subgridspec(
-        nrows=1,
-        ncols=3,
-        width_ratios=[image_margin, image_scale, image_margin],
-        wspace=0.0,
+        add_axes_in_inches(fig, x, title_y, panel_width, title_height, figsize).set_axis_off()
+    add_image_or_placeholder(
+        add_axes_in_inches(fig, image_x, image_y, square_size, square_size, figsize),
+        panel,
+        args,
     )
-    add_image_or_placeholder(fig.add_subplot(image_grid[0, 1]), panel, args)
     add_text(
-        fig.add_subplot(subgrid[2, 0]),
+        add_axes_in_inches(fig, subtitle_x, subtitle_y, subtitle_width, subtitle_height, figsize),
         formatted_subtitle(panel),
         fontsize=args.subtitle_fontsize,
-        wrap=36,
+        max_width_in=subtitle_width,
     )
 
 
-def add_row_separator(fig, outer_slot, args: argparse.Namespace) -> None:
-    ax = fig.add_subplot(outer_slot)
-    ax.set_axis_off()
-    total_gap = args.row_separator_gap_above + args.row_separator_gap_below
-    line_y = 0.5 if total_gap <= 0.0 else args.row_separator_gap_below / total_gap
-    ax.plot(
-        [args.row_separator_side_inset, 1.0 - args.row_separator_side_inset],
-        [line_y, line_y],
-        transform=ax.transAxes,
-        color=ROW_SEPARATOR_COLOR,
-        linewidth=args.line_thickness,
-        solid_capstyle="butt",
-        clip_on=False,
-    )
-
-
-def add_bottom_column_separator(fig, row_slot, left_slot, right_slot, args: argparse.Namespace) -> None:
-    if not args.add_bottom_column_separator:
+def add_group_separator(
+    fig,
+    x: float,
+    y: float,
+    height: float,
+    figsize: tuple[float, float],
+    args: argparse.Namespace,
+) -> None:
+    if not args.add_group_separator:
         return
-    row_bbox = row_slot.get_position(fig)
-    left_bbox = left_slot.get_position(fig)
-    right_bbox = right_slot.get_position(fig)
-    x = 0.5 * (left_bbox.x1 + right_bbox.x0)
-    bottom_inset = max(args.bottom_column_separator_bottom_inset, 0.0)
-    top_inset = max(args.bottom_column_separator_top_inset, 0.0)
-    y0 = row_bbox.y0 + bottom_inset * row_bbox.height
-    y1 = row_bbox.y1 - top_inset * row_bbox.height
+    fig_width, fig_height = figsize
+    bottom_inset = max(args.group_separator_bottom_inset, 0.0)
+    top_inset = max(args.group_separator_top_inset, 0.0)
+    y0 = y + bottom_inset * height
+    y1 = y + height - top_inset * height
     if y1 <= y0:
         return
     fig.add_artist(
         Line2D(
-            [x, x],
-            [y0, y1],
+            [x / fig_width, x / fig_width],
+            [y0 / fig_height, y1 / fig_height],
             transform=fig.transFigure,
             color=ROW_SEPARATOR_COLOR,
             linewidth=args.line_thickness,
@@ -495,63 +679,66 @@ def add_bottom_column_separator(fig, row_slot, left_slot, right_slot, args: argp
     )
 
 
-def add_legend(fig, outer_slot) -> None:
-    ax = fig.add_subplot(outer_slot)
+def add_legend(fig, x: float, y: float, width: float, height: float, figsize: tuple[float, float]) -> None:
+    ax = add_axes_in_inches(fig, x, y, width, height, figsize)
     ax.set_axis_off()
-    handles = [
-        Line2D([0], [0], color=OUR_BLUE, linewidth=LEGEND_LINEWIDTH, label=r"hint$^2$"),
-        Line2D(
-            [0],
-            [0],
-            color=FLOWER_GREEN,
-            linewidth=LEGEND_LINEWIDTH,
-            label="Vision-Language-Action Policy (FLOWER)",
-        ),
-    ]
-    legend = ax.legend(
-        handles=handles,
-        loc="center",
-        ncol=2,
-        frameon=True,
-        fancybox=True,
-        framealpha=1.0,
-        edgecolor="#d4d4d4",
-        facecolor="white",
-        handlelength=1.8,
-        columnspacing=1.2,
-        borderpad=0.35,
-        borderaxespad=0.0,
-    )
-    legend.get_frame().set_linewidth(LEGEND_FRAME_LINEWIDTH)
-
+    add_legend_to_axis(ax)
 
 def compose(output_png: Path, args: argparse.Namespace) -> None:
-    panel_rows = prepare_panels(args)
     plt.rcParams.update(PAPER_FONT)
-    fig = plt.figure(figsize=args.figsize, dpi=args.dpi, facecolor="white")
-    separator_height = max(args.row_separator_gap_above + args.row_separator_gap_below, 1e-6)
-    grid = fig.add_gridspec(
-        nrows=4,
-        ncols=1,
-        height_ratios=[1.0, separator_height, 1.0, args.legend_height],
-        hspace=0.0,
-    )
-    top_grid = grid[0, 0].subgridspec(nrows=1, ncols=3, wspace=args.column_wspace)
-    bottom_grid = grid[2, 0].subgridspec(nrows=1, ncols=3, wspace=args.column_wspace)
-
+    if len(args.figsize) not in {1, 2}:
+        raise ValueError("--figsize expects WIDTH or WIDTH HEIGHT.")
+    width = float(args.figsize[0])
+    if width <= 0.0:
+        raise ValueError("--figsize WIDTH must be positive.")
+    layout = panel_layout(args, width)
+    figsize = resolve_figsize(args, layout)
+    panel_rows = prepare_panels(args)
+    panels = panel_rows[0]
+    fig = plt.figure(figsize=figsize, dpi=args.dpi, facecolor="white")
+    panel_x = [layout["side_margin"]]
+    for gap in layout["column_gaps"]:
+        panel_x.append(panel_x[-1] + layout["panel_width"] + gap)
+    legend_y = 0.0
+    row_y = legend_y + layout["legend_height"]
     show_title = not args.no_titles
-    for col_idx, panel in enumerate(panel_rows[0]):
-        add_panel(fig, top_grid[0, col_idx], panel, args, show_title)
-    add_row_separator(fig, grid[1, 0], args)
-    for col_idx, panel in enumerate(panel_rows[1]):
-        add_panel(fig, bottom_grid[0, col_idx], panel, args, show_title)
-    add_bottom_column_separator(fig, grid[2, 0], bottom_grid[0, 1], bottom_grid[0, 2], args)
-    add_legend(fig, grid[3, 0])
+
+    for col_idx, panel in enumerate(panels):
+        add_panel(
+            fig,
+            panel,
+            args,
+            show_title,
+            layout,
+            figsize,
+            panel_x[col_idx],
+            row_y,
+            panel_x[col_idx],
+            layout["panel_width"],
+        )
+    if 0 <= GROUP_SEPARATOR_AFTER_COL < len(panels) - 1:
+        separator_gap = layout["column_gaps"][GROUP_SEPARATOR_AFTER_COL]
+        add_group_separator(
+            fig,
+            panel_x[GROUP_SEPARATOR_AFTER_COL] + layout["panel_width"] + 0.5 * separator_gap,
+            row_y,
+            layout["panel_height"],
+            figsize,
+            args,
+        )
+    add_legend(
+        fig,
+        0.0,
+        legend_y + layout["legend_bottom_margin"],
+        width,
+        layout["legend_content_height"],
+        figsize,
+    )
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_png, dpi=args.dpi, bbox_inches="tight", pad_inches=0.03)
+    fig.savefig(output_png, dpi=args.dpi, pad_inches=0.0)
     if args.pdf:
-        fig.savefig(output_png.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.03)
+        fig.savefig(output_png.with_suffix(".pdf"), pad_inches=0.0)
     plt.close(fig)
 
 
