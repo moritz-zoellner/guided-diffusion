@@ -1,0 +1,64 @@
+#!/bin/bash
+#SBATCH -J telograf_real_chain_h128
+#SBATCH -A rpaleja
+#SBATCH -p a100-40gb
+#SBATCH --cpus-per-task=8
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=96G
+#SBATCH --qos=normal
+#SBATCH -t 48:00:00
+#SBATCH -o /scratch/gilbreth/zoellner/guided-diffusion/outputs/telograf/logs/%x-%j.out
+
+set -euo pipefail
+
+module load conda
+
+CONDA_ENV=${CONDA_ENV:-guided_diffusion}
+REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/gilbreth/zoellner/guided-diffusion}
+DATA_DIR=${DATA_DIR:-${SCRATCH_ROOT}/outputs/telograf/toy_squares/data/real_chains_len5_h128_10k}
+OUTPUT_ROOT=${OUTPUT_ROOT:-${SCRATCH_ROOT}/outputs/telograf/toy_squares/runs}
+RUN_NAME=${RUN_NAME:-toy_squares_real_chain_len5_h128_telograf}
+EPOCHS=${EPOCHS:-250}
+BATCH_SIZE=${BATCH_SIZE:-192}
+
+conda activate "${CONDA_ENV}"
+
+mkdir -p "${OUTPUT_ROOT}" "${SCRATCH_ROOT}/outputs/telograf/logs" "${SCRATCH_ROOT}/outputs/telograf/.cache/matplotlib" "${SCRATCH_ROOT}/outputs/telograf/.cache/fontconfig" "${SCRATCH_ROOT}/outputs/telograf/.cache/huggingface"
+export MPLCONFIGDIR=${MPLCONFIGDIR:-${SCRATCH_ROOT}/outputs/telograf/.cache/matplotlib}
+export XDG_CACHE_HOME=${XDG_CACHE_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache}
+export HF_HOME=${HF_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache/huggingface}
+export TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-${HF_HOME}/hub}
+export CUDA_DEVICE_ORDER=${CUDA_DEVICE_ORDER:-PCI_BUS_ID}
+unset DISPLAY
+
+cd "${REPO_ROOT}"
+start_time=$(date +%s)
+
+echo "Starting TeLoGraF ToySquares real-chain H128 training"
+echo "data_dir=${DATA_DIR}"
+echo "output_root=${OUTPUT_ROOT}"
+echo "run_name=${RUN_NAME}"
+echo "epochs=${EPOCHS}"
+echo "conda_env=${CONDA_ENV}"
+
+test -f "${DATA_DIR}/data_h128.npz"
+
+python -u telograf_toy_squares/train_telograf_toy_squares.py \
+  --data "${DATA_DIR}/data_h128.npz" \
+  --output-root "${OUTPUT_ROOT}" \
+  --name "${RUN_NAME}" \
+  --epochs "${EPOCHS}" \
+  --batch-size "${BATCH_SIZE}" \
+  --lr 3e-4 \
+  --n-timesteps 100 \
+  --dim 64 \
+  --dim-mults 1 2 4 8 \
+  --num-workers 4 \
+  --eval-samples 512 \
+  --save-every 25 \
+  --require-telograf-backend
+
+end_time=$(date +%s)
+elapsed=$((end_time - start_time))
+echo "Finished TeLoGraF ToySquares real-chain H128 training. elapsed_seconds=${elapsed}"
