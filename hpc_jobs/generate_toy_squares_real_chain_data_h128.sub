@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH -J toy_squares_data
+#SBATCH -J toy_real_chain_h128_data
 #SBATCH -A rpaleja
 #SBATCH -p a100-40gb
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=128G
 #SBATCH --qos=normal
-#SBATCH -t 08:00:00
+#SBATCH -t 12:00:00
 #SBATCH -o /scratch/gilbreth/zoellner/guided-diffusion/outputs/telograf/logs/%x-%j.out
 
 set -euo pipefail
@@ -16,8 +16,9 @@ module load conda
 CONDA_ENV=${CONDA_ENV:-guided_diffusion}
 REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
 SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/gilbreth/zoellner/guided-diffusion}
-OUT_DIR=${OUT_DIR:-${SCRATCH_ROOT}/outputs/telograf/toy_squares/data/full_10k}
+OUT_DIR=${OUT_DIR:-${SCRATCH_ROOT}/outputs/telograf/toy_squares/data/real_chains_len5_h128_10k}
 N_ROLLOUTS=${N_ROLLOUTS:-10000}
+SEED=${SEED:-23}
 
 conda activate "${CONDA_ENV}"
 
@@ -26,20 +27,26 @@ export MPLCONFIGDIR=${MPLCONFIGDIR:-${SCRATCH_ROOT}/outputs/telograf/.cache/matp
 export XDG_CACHE_HOME=${XDG_CACHE_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache}
 export HF_HOME=${HF_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache/huggingface}
 export TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-${HF_HOME}/hub}
+unset DISPLAY
 
 cd "${REPO_ROOT}"
 start_time=$(date +%s)
 
-echo "Starting Toy Squares TeLoGraF atomic dataset source generation"
+echo "Starting real-env ToySquares length-5 H128 TeLoGraF dataset generation"
 echo "out_dir=${OUT_DIR}"
 echo "n_rollouts=${N_ROLLOUTS}"
 echo "conda_env=${CONDA_ENV}"
 
-OUT_DIR="${OUT_DIR}" \
-N_ROLLOUTS="${N_ROLLOUTS}" \
-PYTHON_BIN="$(which python)" \
-bash telograf_toy_squares/generate_toy_squares_data.sh
+python -u telograf_toy_squares/generate_toy_squares_real_chain_data.py \
+  --output-dir "${OUT_DIR}" \
+  --n-rollouts "${N_ROLLOUTS}" \
+  --chain-length 5 \
+  --horizon 128 \
+  --seed "${SEED}" \
+  --policy-step-stride 3 \
+  --max-steps-per-goal 30 \
+  --preview-videos 0
 
 end_time=$(date +%s)
 elapsed=$((end_time - start_time))
-echo "Finished dataset generation. elapsed_seconds=${elapsed}"
+echo "Finished real-chain H128 dataset generation. elapsed_seconds=${elapsed}"

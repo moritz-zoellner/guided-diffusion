@@ -39,9 +39,10 @@ LABEL_NAMES = ["can_grabbed", "pouring_right", "pouring_left"]
 class LabelConfig:
     gripper_closed_threshold: float = 128.5
     pour_twist_on_deg: float = 90.0
-    pour_twist_off_deg: float = 75.0
+    pour_twist_off_deg: float = 90.0
     positive_twist_is_right: bool = True
-    debounce_steps: int = 3
+    debounce_steps: int = 1
+    twist_source: str = "wrist"
 
 
 def load_label_config(path: Path | str | None) -> LabelConfig:
@@ -93,12 +94,15 @@ def _hysteresis_greater_than(values: np.ndarray, on_threshold: float, off_thresh
 def label_arrays(
     eef_quat_wxyz: np.ndarray,
     gripper_width: np.ndarray,
+    wrist_delta: np.ndarray | None = None,
     config: LabelConfig | None = None,
 ) -> np.ndarray:
     """Return [can_grabbed, pouring_right, pouring_left] labels for every timestep.
 
-    Pouring labels use the relative twist of the gripper around its local z axis
-    from the start pose of each trajectory:
+    By default, pouring labels use the real robot wrist-3 joint displacement
+    from the start of each trajectory. This matches the online automaton labels.
+    If the caller does not provide wrist data, the function falls back to the
+    EEF quaternion local-z twist from the start pose:
 
         q_t = q_start * q_delta_local
 
@@ -109,9 +113,12 @@ def label_arrays(
     eef_quat_wxyz = np.asarray(eef_quat_wxyz, dtype=np.float32)
     gripper_width = np.asarray(gripper_width, dtype=np.float32).reshape(len(eef_quat_wxyz), -1)[:, 0]
 
-    q_start = np.repeat(eef_quat_wxyz[:1], len(eef_quat_wxyz), axis=0)
-    q_delta_local = quat_wxyz_multiply(quat_wxyz_conjugate(q_start), eef_quat_wxyz)
-    local_twist = quat_wxyz_to_rotvec(q_delta_local)[:, 2]
+    if str(config.twist_source).lower() == "wrist" and wrist_delta is not None:
+        local_twist = np.asarray(wrist_delta, dtype=np.float32).reshape(len(eef_quat_wxyz), -1)[:, 0]
+    else:
+        q_start = np.repeat(eef_quat_wxyz[:1], len(eef_quat_wxyz), axis=0)
+        q_delta_local = quat_wxyz_multiply(quat_wxyz_conjugate(q_start), eef_quat_wxyz)
+        local_twist = quat_wxyz_to_rotvec(q_delta_local)[:, 2]
 
     on = np.deg2rad(float(config.pour_twist_on_deg))
     off = np.deg2rad(float(config.pour_twist_off_deg))
@@ -136,11 +143,21 @@ def label_demo(
     config: LabelConfig | None = None,
     eef_quat_key: str = "eef_quat_wxyz",
     gripper_width_key: str = "gripper_width",
+    wrist_delta_key: str | None = "wrist_3_delta",
     **_: object,
 ) -> np.ndarray:
+    config = LabelConfig() if config is None else config
+    wrist_delta = None
+    if wrist_delta_key is not None:
+        try:
+            wrist_delta = read_obs_array(demo, wrist_delta_key)
+        except KeyError:
+            if str(config.twist_source).lower() == "wrist":
+                raise
     return label_arrays(
         read_obs_array(demo, eef_quat_key),
         read_obs_array(demo, gripper_width_key),
+        wrist_delta=wrist_delta,
         config=config,
     )
 
@@ -208,6 +225,7 @@ def write_label_diagnostics(args):
                 config=config,
                 eef_quat_key=args.eef_quat_key,
                 gripper_width_key=args.gripper_width_key,
+                wrist_delta_key=args.wrist_delta_key,
             )
             summary["demos"][key] = {
                 name: int(labels[:, idx].sum()) for idx, name in enumerate(LABEL_NAMES)
@@ -225,6 +243,7 @@ def main():
     parser.add_argument("--label-config", type=Path, default=None)
     parser.add_argument("--eef-quat-key", default="eef_quat_wxyz")
     parser.add_argument("--gripper-width-key", default="gripper_width")
+    parser.add_argument("--wrist-delta-key", default="wrist_3_delta")
     args = parser.parse_args()
     write_label_diagnostics(args)
 

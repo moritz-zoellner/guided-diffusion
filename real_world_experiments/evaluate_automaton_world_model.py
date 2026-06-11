@@ -83,7 +83,11 @@ def _event_metadata(trajectories, action_horizon, target_rule):
 def _load_config(run_dir):
     config = json.loads((run_dir / "train_config.json").read_text())
     label_config = LabelConfig(**config.get("label_config", {}))
-    label_keys = config.get("label_keys") or {"eef_quat_key": "eef_quat_wxyz", "gripper_width_key": "gripper_width"}
+    label_keys = config.get("label_keys") or {
+        "eef_quat_key": "eef_quat_wxyz",
+        "gripper_width_key": "gripper_width",
+        "wrist_delta_key": "wrist_3_delta",
+    }
     return config, label_config, label_keys
 
 
@@ -145,6 +149,8 @@ def evaluate_run(run_dir, split, checkpoint_name, batch_size, device):
             "current_false_rise_in_horizon": (~current) & rises,
             "current_false_target_positive_no_rise": (~current) & (y_true > 0.5) & (~rises),
             "current_false_target_negative": (~current) & (y_true <= 0.5),
+            "current_true_target_negative": current & (y_true <= 0.5),
+            "current_true_target_positive": current & (y_true > 0.5),
             "current_true": current,
         }
         groups = {}
@@ -171,6 +177,14 @@ def evaluate_run(run_dir, split, checkpoint_name, batch_size, device):
             pair_score = np.concatenate([y_score[event_mask], y_score[negative_mask]])
             event_vs_negative_auc = _safe_metric(roc_auc_score, pair_true, pair_score)
 
+        clear_mask = masks["current_true_target_negative"]
+        stay_mask = masks["current_true_target_positive"]
+        clear_vs_stay_auc = None
+        if clear_mask.any() and stay_mask.any():
+            pair_true = np.concatenate([np.ones(clear_mask.sum()), np.zeros(stay_mask.sum())])
+            pair_score = np.concatenate([1.0 - y_score[clear_mask], 1.0 - y_score[stay_mask]])
+            clear_vs_stay_auc = _safe_metric(roc_auc_score, pair_true, pair_score)
+
         label_results[name] = {
             "target_positive_rate": float(y_true.mean()),
             "pred_mean": float(y_score.mean()),
@@ -179,6 +193,7 @@ def evaluate_run(run_dir, split, checkpoint_name, batch_size, device):
             "roc_auc": _safe_metric(roc_auc_score, y_true, y_score),
             "average_precision": _safe_metric(average_precision_score, y_true, y_score),
             "event_vs_negative_auc": event_vs_negative_auc,
+            "clear_vs_stay_auc": clear_vs_stay_auc,
             "groups": groups,
         }
 
@@ -219,17 +234,25 @@ def print_report(report):
         auc = "nan" if result["roc_auc"] is None else f"{result['roc_auc']:.3f}"
         ap = "nan" if result["average_precision"] is None else f"{result['average_precision']:.3f}"
         ev_auc = "nan" if result["event_vs_negative_auc"] is None else f"{result['event_vs_negative_auc']:.3f}"
+        clear_auc = "nan" if result["clear_vs_stay_auc"] is None else f"{result['clear_vs_stay_auc']:.3f}"
         event_group = result["groups"]["current_false_rise_in_horizon"]
         neg_group = result["groups"]["current_false_target_negative"]
+        clear_group = result["groups"]["current_true_target_negative"]
+        stay_group = result["groups"]["current_true_target_positive"]
         event_mean = event_group.get("pred_mean")
         neg_mean = neg_group.get("pred_mean")
+        clear_mean = clear_group.get("pred_mean")
+        stay_mean = stay_group.get("pred_mean")
         event_mean_str = "nan" if event_mean is None else f"{event_mean:.3f}"
         neg_mean_str = "nan" if neg_mean is None else f"{neg_mean:.3f}"
+        clear_mean_str = "nan" if clear_mean is None else f"{clear_mean:.3f}"
+        stay_mean_str = "nan" if stay_mean is None else f"{stay_mean:.3f}"
         print(
             f"  {name:<15} pos={result['target_positive_rate']:.3f} "
             f"pred={result['pred_mean']:.3f} bce={result['bce']:.3f} "
             f"auc={auc} ap={ap} event_auc={ev_auc} "
-            f"event_pred={event_mean_str} neg_pred={neg_mean_str}"
+            f"event_pred={event_mean_str} neg_pred={neg_mean_str} "
+            f"clear_auc={clear_auc} clear_pred={clear_mean_str} stay_pred={stay_mean_str}"
         )
 
 

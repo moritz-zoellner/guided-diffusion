@@ -1,0 +1,107 @@
+#!/bin/bash
+#SBATCH -J telograf_toy_plot
+#SBATCH -A rpaleja
+#SBATCH -p a100-40gb
+#SBATCH --cpus-per-task=8
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=64G
+#SBATCH --qos=normal
+#SBATCH -t 12:00:00
+#SBATCH -o /scratch/gilbreth/zoellner/guided-diffusion/outputs/telograf/logs/%x-%j.out
+
+set -euo pipefail
+
+module load conda
+
+CONDA_ENV=${CONDA_ENV:-guided_diffusion}
+REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/gilbreth/zoellner/guided-diffusion}
+RUN_ROOT=${RUN_ROOT:-${SCRATCH_ROOT}/outputs/telograf/toy_squares_rollouts/long_chain_paper_plot}
+N_ROLLOUTS=${N_ROLLOUTS:-20}
+SEED_START=${SEED_START:-0}
+MAX_LTL_HORIZON=${MAX_LTL_HORIZON:-5}
+
+H128_CKPT=${H128_CKPT:-${SCRATCH_ROOT}/outputs/telograf/toy_squares/runs/toy_squares_long_chain_len5_h128_telograf/checkpoint.pt}
+H196_CKPT=${H196_CKPT:-${SCRATCH_ROOT}/outputs/telograf/toy_squares/runs/toy_squares_long_chain_len5_h196_telograf/checkpoint.pt}
+
+conda activate "${CONDA_ENV}"
+
+mkdir -p "${RUN_ROOT}" "${SCRATCH_ROOT}/outputs/telograf/logs" \
+  "${SCRATCH_ROOT}/outputs/telograf/.cache/matplotlib" \
+  "${SCRATCH_ROOT}/outputs/telograf/.cache/fontconfig" \
+  "${SCRATCH_ROOT}/outputs/telograf/.cache/huggingface"
+
+export MPLCONFIGDIR=${MPLCONFIGDIR:-${SCRATCH_ROOT}/outputs/telograf/.cache/matplotlib}
+export XDG_CACHE_HOME=${XDG_CACHE_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache}
+export HF_HOME=${HF_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache/huggingface}
+export TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-${HF_HOME}/hub}
+export CUDA_DEVICE_ORDER=${CUDA_DEVICE_ORDER:-PCI_BUS_ID}
+unset DISPLAY
+
+cd "${REPO_ROOT}"
+start_time=$(date +%s)
+
+echo "Starting TeLoGraF ToySquares long-chain paper-plot rollouts"
+echo "run_root=${RUN_ROOT}"
+echo "n_rollouts=${N_ROLLOUTS}"
+echo "max_ltl_horizon=${MAX_LTL_HORIZON}"
+echo "seed_start=${SEED_START}"
+echo "h128_ckpt=${H128_CKPT}"
+echo "h196_ckpt=${H196_CKPT}"
+
+test -f "${H128_CKPT}"
+test -f "${H196_CKPT}"
+
+python -u telograf_toy_squares/run_telograf_toy_squares_paper_tests.py \
+  --checkpoint "${H128_CKPT}" \
+  --output_dir "${RUN_ROOT}/telograf_len5_h128_h1_h5_n${N_ROLLOUTS}" \
+  --method_name telograf_len5_h128 \
+  --n_rollouts "${N_ROLLOUTS}" \
+  --env_horizon 128 \
+  --max_ltl_horizon "${MAX_LTL_HORIZON}" \
+  --seed_start "${SEED_START}" \
+  --no-append_existing_aggregate \
+  --overwrite_existing_rollouts \
+  --no-cpu \
+  --no-record_video
+
+python -u telograf_toy_squares/run_telograf_toy_squares_paper_tests.py \
+  --checkpoint "${H196_CKPT}" \
+  --output_dir "${RUN_ROOT}/telograf_len5_h196_h1_h5_n${N_ROLLOUTS}" \
+  --method_name telograf_len5_h196 \
+  --n_rollouts "${N_ROLLOUTS}" \
+  --env_horizon 196 \
+  --max_ltl_horizon "${MAX_LTL_HORIZON}" \
+  --seed_start "${SEED_START}" \
+  --no-append_existing_aggregate \
+  --overwrite_existing_rollouts \
+  --no-cpu \
+  --no-record_video
+
+python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+run_root = Path(os.environ["RUN_ROOT"])
+for name in [
+    f"telograf_len5_h128_h1_h5_n{os.environ['N_ROLLOUTS']}",
+    f"telograf_len5_h196_h1_h5_n{os.environ['N_ROLLOUTS']}",
+]:
+    path = run_root / name / "aggregate_summary.json"
+    print(f"\n{name}")
+    rows = json.loads(path.read_text())
+    print("H\tactual\timagined\tmean_steps\tmean_stages")
+    for row in rows:
+        print(
+            f"{row['ltl_horizon']}\t"
+            f"{row.get('actual_spec_success_rate', row.get('success_rate', 0.0)):.3f}\t"
+            f"{row.get('imagined_telograf_success_rate', 0.0):.3f}\t"
+            f"{row.get('mean_steps', 0.0):.2f}\t"
+            f"{row.get('mean_stages', 0.0):.2f}"
+        )
+PY
+
+end_time=$(date +%s)
+elapsed=$((end_time - start_time))
+echo "Finished TeLoGraF ToySquares long-chain paper-plot rollouts. elapsed_seconds=${elapsed}"
