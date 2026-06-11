@@ -7,7 +7,7 @@
 #SBATCH --mem=96G
 #SBATCH --qos=normal
 #SBATCH -t 24:00:00
-#SBATCH -o slurm-%j.out
+#SBATCH -o /scratch/gilbreth/zoellner/guided-diffusion/outputs/telograf/logs/%x-%j.out
 
 set -euo pipefail
 
@@ -16,18 +16,24 @@ module load conda
 # Override at submission time if your cluster env / path differs:
 #   CONDA_ENV=guided_diffusion sbatch hpc_jobs/train_telograf_calvin_h64.sub
 #   DATASET=/path/to/calvin.hdf5 sbatch hpc_jobs/train_telograf_calvin_h64.sub
-CONDA_ENV=${CONDA_ENV:-calvin}
+CONDA_ENV=${CONDA_ENV:-guided_diffusion}
 REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
-DATASET=${DATASET:-${REPO_ROOT}/data/calvin.hdf5}
-OUTPUT_ROOT=${OUTPUT_ROOT:-${REPO_ROOT}/outputs/telograf}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/gilbreth/zoellner/guided-diffusion}
+DATASET=${DATASET:-${SCRATCH_ROOT}/data/calvin.hdf5}
+OUTPUT_ROOT=${OUTPUT_ROOT:-${SCRATCH_ROOT}/outputs/telograf/calvin}
 DATASET_NAME=${DATASET_NAME:-calvin_play_eventual_h64}
 RUN_NAME=${RUN_NAME:-calvin_play_eventual_h64_telograf}
 RUN_DIAGNOSTICS=${RUN_DIAGNOSTICS:-0}
 
 conda activate "${CONDA_ENV}"
 
-export MPLCONFIGDIR=${MPLCONFIGDIR:-/tmp/matplotlib}
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+mkdir -p "${OUTPUT_ROOT}/datasets" "${OUTPUT_ROOT}/runs" "${OUTPUT_ROOT}/diagnostics" "${SCRATCH_ROOT}/outputs/telograf/logs" "${SCRATCH_ROOT}/outputs/telograf/.cache/matplotlib" "${SCRATCH_ROOT}/outputs/telograf/.cache/fontconfig" "${SCRATCH_ROOT}/outputs/telograf/.cache/huggingface"
+
+export MPLCONFIGDIR=${MPLCONFIGDIR:-${SCRATCH_ROOT}/outputs/telograf/.cache/matplotlib}
+export XDG_CACHE_HOME=${XDG_CACHE_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache}
+export HF_HOME=${HF_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache/huggingface}
+export TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-${HF_HOME}/hub}
+export CUDA_DEVICE_ORDER=${CUDA_DEVICE_ORDER:-PCI_BUS_ID}
 unset DISPLAY
 
 cd "${REPO_ROOT}"
@@ -37,6 +43,18 @@ echo "Starting TeLoGraF CALVIN H=64 single-behavior pipeline"
 echo "dataset=${DATASET}"
 echo "output_root=${OUTPUT_ROOT}"
 echo "conda_env=${CONDA_ENV}"
+
+test -f "${DATASET}"
+python -u - <<'PY'
+from pathlib import Path
+import sys
+
+repo = Path.cwd()
+sys.path.insert(0, str(repo / "TeLoGraF" / "code"))
+from z_diffuser import GaussianFlow, TemporalUnet
+
+print(f"TeLoGraF backend OK: {GaussianFlow.__name__}, {TemporalUnet.__name__}")
+PY
 
 if [ "${RUN_DIAGNOSTICS}" = "1" ]; then
   python -u -m telograf_calvin.diagnose_play_data \

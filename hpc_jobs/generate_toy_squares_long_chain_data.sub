@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J toy_squares_data
+#SBATCH -J toy_long_chain_data
 #SBATCH -A rpaleja
 #SBATCH -p a100-40gb
 #SBATCH --cpus-per-task=8
@@ -16,8 +16,9 @@ module load conda
 CONDA_ENV=${CONDA_ENV:-guided_diffusion}
 REPO_ROOT=${REPO_ROOT:-/home/zoellner/src/guided-diffusion}
 SCRATCH_ROOT=${SCRATCH_ROOT:-/scratch/gilbreth/zoellner/guided-diffusion}
-OUT_DIR=${OUT_DIR:-${SCRATCH_ROOT}/outputs/telograf/toy_squares/data/full_10k}
+OUT_DIR=${OUT_DIR:-${SCRATCH_ROOT}/outputs/telograf/toy_squares/data/long_chains_len5_10k}
 N_ROLLOUTS=${N_ROLLOUTS:-10000}
+SEED=${SEED:-17}
 
 conda activate "${CONDA_ENV}"
 
@@ -26,20 +27,24 @@ export MPLCONFIGDIR=${MPLCONFIGDIR:-${SCRATCH_ROOT}/outputs/telograf/.cache/matp
 export XDG_CACHE_HOME=${XDG_CACHE_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache}
 export HF_HOME=${HF_HOME:-${SCRATCH_ROOT}/outputs/telograf/.cache/huggingface}
 export TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-${HF_HOME}/hub}
+unset DISPLAY
 
 cd "${REPO_ROOT}"
 start_time=$(date +%s)
 
-echo "Starting Toy Squares TeLoGraF atomic dataset source generation"
+echo "Starting ToySquares length-5 point-to-point TeLoGraF dataset generation"
 echo "out_dir=${OUT_DIR}"
 echo "n_rollouts=${N_ROLLOUTS}"
 echo "conda_env=${CONDA_ENV}"
 
-OUT_DIR="${OUT_DIR}" \
-N_ROLLOUTS="${N_ROLLOUTS}" \
-PYTHON_BIN="$(which python)" \
-bash telograf_toy_squares/generate_toy_squares_data.sh
+python -u telograf_toy_squares/generate_toy_squares_long_chain_data.py \
+  --output-dir "${OUT_DIR}" \
+  --n-rollouts "${N_ROLLOUTS}" \
+  --chain-length 5 \
+  --horizons 128 196 \
+  --seed "${SEED}" \
+  --preview-videos 0
 
 end_time=$(date +%s)
 elapsed=$((end_time - start_time))
-echo "Finished dataset generation. elapsed_seconds=${elapsed}"
+echo "Finished long-chain dataset generation. elapsed_seconds=${elapsed}"
