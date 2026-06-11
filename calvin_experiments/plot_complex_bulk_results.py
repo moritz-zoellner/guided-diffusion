@@ -27,6 +27,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LATEX_TEXTWIDTH_PT = 397.48499
 PT_PER_IN = 72.27
 TEXTWIDTH_IN = LATEX_TEXTWIDTH_PT / PT_PER_IN
+DEFAULT_FIG_HEIGHT_IN = 2.70
+DEFAULT_PANEL_GAP_IN = 0.23
+DEFAULT_LEGEND_MARGIN_IN = 0.44
+DEFAULT_LINE_PLOT_AXIS_LABELPAD = -0.5
+DEFAULT_LINE_PLOT_LABEL_SIZE = 5.5
 FIG_DPI = 300
 
 OUR_BLUE = "#275fca"
@@ -38,11 +43,12 @@ ZERO_BAR_VISUAL_HEIGHT = 0.012
 ZERO_BAR_X_Y = 0.038
 ZERO_BAR_X_MARKER_SIZE = 7.0
 ZERO_BAR_X_LINEWIDTH = 0.55
-LTLDOG_GRAY = "#5f6368"
-LTLDOG_GRAY_LIGHT = "#9aa0a6"
-FLOWER_GRAY = "#c3c7cd"
-LLM_FLOWER_STATIC_GRAY = "#9aa0a6"
-LLM_FLOWER_CLOSED_LOOP_GRAY = "#5f6368"
+ARTICULATED_LIGHT_GRAY = "#d7d9de"
+ARTICULATED_MIDDLE_GRAY = "#9aa0a6"
+ARTICULATED_DARK_GRAY = "#5f6368"
+FLOWER_GRAY = ARTICULATED_DARK_GRAY
+LLM_FLOWER_STATIC_GRAY = ARTICULATED_MIDDLE_GRAY
+LLM_FLOWER_CLOSED_LOOP_GRAY = ARTICULATED_LIGHT_GRAY
 FLOWER_GPC_GREEN = "#f7f8fa"
 UNSAFE_RED = "#b85f5a"
 ANGLE_TRACE_ROLLOUTS = 3
@@ -53,13 +59,15 @@ SAFETY_TRACE_TIMESTEP_LIM = 60.0
 ANGLE_TARGET_DEG = 20.0
 ANGLE_ACCEPTED_REGION_ALPHA = 0.14
 INIT_POS_MARKER_SIZE = 1.7
+SAFETY_REGION_LABEL_FONT_SIZE = 3.9
 INIT_POS_LABEL_IDX = 0
 INIT_POS_LABEL_X_OFFSET = -0.005
 INIT_POS_LABEL_Y_OFFSET = -0.010
-GRIPPER_YLABEL_X = -0.13
 SWITCH_OFF_MARKER_X_OFFSET = 0.0065
 SWITCH_OFF_MARKER_Y_OFFSET = 0.015
 SWITCH_OFF_LABEL_X_OFFSET = 0.0094
+LINE_PLOT_AXIS_LABELPAD = DEFAULT_LINE_PLOT_AXIS_LABELPAD
+LINE_PLOT_LABEL_SIZE = DEFAULT_LINE_PLOT_LABEL_SIZE
 
 
 DEFAULT_FLOWER_RUN = (
@@ -366,7 +374,15 @@ def available_methods(summary_by_method: dict[str, dict[str, dict[str, str]]]) -
     ]
 
 
-def style_axis(ax: plt.Axes, *, grid_axis: str | None = "y") -> None:
+def style_axis(
+    ax: plt.Axes,
+    *,
+    grid_axis: str | None = "y",
+    y_labelpad: float | None = None,
+    y_label_size: float | None = None,
+    x_labelpad: float | None = None,
+    x_label_size: float | None = None,
+) -> None:
     for spine in ax.spines.values():
         spine.set_color("black")
         spine.set_linewidth(PANEL_FRAME_LW)
@@ -374,8 +390,12 @@ def style_axis(ax: plt.Axes, *, grid_axis: str | None = "y") -> None:
         ax.grid(axis=grid_axis, alpha=0.22, linewidth=0.35)
     ax.set_axisbelow(True)
     ax.tick_params(axis="both", color=AXIS_GRAY, width=0.45, length=2.0, pad=1.0)
-    ax.yaxis.labelpad = 2.0
-    ax.xaxis.labelpad = 2.0
+    ax.yaxis.labelpad = 2.0 if y_labelpad is None else y_labelpad
+    ax.xaxis.labelpad = 2.0 if x_labelpad is None else x_labelpad
+    if y_label_size is not None and ax.get_ylabel():
+        ax.yaxis.label.set_size(y_label_size)
+    if x_label_size is not None and ax.get_xlabel():
+        ax.xaxis.label.set_size(x_label_size)
 
 
 def format_y_ticks(ax: plt.Axes) -> None:
@@ -670,9 +690,15 @@ def plot_inference_time(
             ax.set_xticks(np.unique(all_distances))
         ax.set_ylim(0.0, INFERENCE_TIME_YLIM)
     format_integer_ticks(ax, use_integer_locator=False)
-    ax.set_box_aspect(1.0)
     set_panel_title(ax, "Inference Time")
-    style_axis(ax, grid_axis="both")
+    style_axis(
+        ax,
+        grid_axis="both",
+        y_labelpad=LINE_PLOT_AXIS_LABELPAD,
+        y_label_size=LINE_PLOT_LABEL_SIZE,
+        x_labelpad=LINE_PLOT_AXIS_LABELPAD,
+        x_label_size=LINE_PLOT_LABEL_SIZE,
+    )
     return rows
 
 
@@ -734,7 +760,7 @@ def plot_safety_bars(
     format_y_ticks(ax)
     ax.set_xticks(centers)
     ax.set_xticklabels([str(group["label"]) for group in SAFETY_GROUPS])
-    ax.tick_params(axis="x", bottom=False, labelbottom=True, labelsize=6, pad=2.0)
+    ax.tick_params(axis="x", bottom=False, labelbottom=True, labelsize=5.2, pad=2.0)
     set_panel_title(ax, "Safety Capabilities")
     style_axis(ax)
 
@@ -853,7 +879,7 @@ def plot_metric_traces(
         ax.plot(
             np.arange(len(values)),
             values,
-            color=LLM_FLOWER_CLOSED_LOOP_GRAY,
+            color=METHOD_COLORS["flower"],
             linewidth=0.70,
             alpha=0.72,
             zorder=3,
@@ -893,6 +919,7 @@ def plot_safety_region(
     flower_gpc_task_dir: Path | None,
     n_rollouts: int,
     init_pos_label_idx: int | None,
+    label_font_size: float,
 ) -> None:
     ours_paths = rollout_trace_paths(ours_task_dir, n_rollouts)
     flower_paths = rollout_trace_paths(flower_task_dir, n_rollouts)
@@ -940,7 +967,7 @@ def plot_safety_region(
         faded_path(
             ax,
             eef_xy,
-            LLM_FLOWER_CLOSED_LOOP_GRAY,
+            METHOD_COLORS["flower"],
             linewidth=0.80,
             alpha=(0.22, 0.88),
             zorder=7,
@@ -965,7 +992,7 @@ def plot_safety_region(
         )
 
     start_groups = [
-        (flower_trajs, LLM_FLOWER_CLOSED_LOOP_GRAY),
+        (flower_trajs, METHOD_COLORS["flower"]),
         (flower_gpc_trajs, FLOWER_GPC_GREEN),
         (ours_trajs, OUR_BLUE),
     ]
@@ -1002,7 +1029,7 @@ def plot_safety_region(
             init_xy[0] + INIT_POS_LABEL_X_OFFSET,
             init_xy[1] + INIT_POS_LABEL_Y_OFFSET,
             "init_pos",
-            fontsize=4.8,
+            fontsize=label_font_size,
             ha="right",
             va="center",
             color="black",
@@ -1041,7 +1068,7 @@ def plot_safety_region(
             switch_xy[0] + SWITCH_OFF_LABEL_X_OFFSET,
             switch_xy[1],
             "switch_off",
-            fontsize=4.8,
+            fontsize=label_font_size,
             ha="left",
             va="center",
             color="black",
@@ -1052,7 +1079,7 @@ def plot_safety_region(
     ax.set_box_aspect(1.0)
     ax.set_aspect("equal", adjustable="box")
     set_panel_title(ax, "Safety Region")
-    set_panel_subtitle(ax, "eef position[xy trajectory]")
+    set_panel_subtitle(ax, "eef position")
     style_axis(ax, grid_axis=None)
 
 
@@ -1092,8 +1119,9 @@ def plot_trace_timeseries(
         ours_angle,
         band=angle_band,
     )
+    ax_angle.set_xlabel("timesteps")
     ax_angle.set_ylabel(r"angle[$^\circ$]")
-    set_panel_title(ax_angle, "Safety Metrics")
+    set_panel_title(ax_angle, "Safety Angle")
     set_trace_ylim(
         ax_angle,
         flower_angle + ours_angle,
@@ -1101,8 +1129,15 @@ def plot_trace_timeseries(
         pad_frac=0.08,
     )
     format_integer_ticks(ax_angle)
-    style_axis(ax_angle, grid_axis="both")
-    ax_angle.tick_params(axis="x", labelbottom=False)
+    ax_angle.set_xlim(0.0, SAFETY_TRACE_TIMESTEP_LIM)
+    style_axis(
+        ax_angle,
+        grid_axis="both",
+        y_labelpad=LINE_PLOT_AXIS_LABELPAD,
+        y_label_size=LINE_PLOT_LABEL_SIZE,
+        x_labelpad=LINE_PLOT_AXIS_LABELPAD,
+        x_label_size=LINE_PLOT_LABEL_SIZE,
+    )
 
     plot_metric_traces(
         ax_gripper,
@@ -1120,9 +1155,16 @@ def plot_trace_timeseries(
     format_integer_ticks(ax_gripper, use_integer_locator=False)
     ax_gripper.set_xlabel("timesteps")
     ax_gripper.set_ylabel("gripper[cm]")
-    ax_gripper.yaxis.set_label_coords(GRIPPER_YLABEL_X, 0.5)
     ax_gripper.set_xlim(0.0, SAFETY_TRACE_TIMESTEP_LIM)
-    style_axis(ax_gripper, grid_axis="both")
+    set_panel_title(ax_gripper, "Safety Gripper")
+    style_axis(
+        ax_gripper,
+        grid_axis="both",
+        y_labelpad=LINE_PLOT_AXIS_LABELPAD,
+        y_label_size=LINE_PLOT_LABEL_SIZE,
+        x_labelpad=LINE_PLOT_AXIS_LABELPAD,
+        x_label_size=LINE_PLOT_LABEL_SIZE,
+    )
 
 
 def collect_plot_data(
@@ -1233,42 +1275,68 @@ def task_dir_from_runs(run_dirs: list[Path], *tasks: str) -> Path:
 
 
 def computed_layout(
+    figure_height: float | None = DEFAULT_FIG_HEIGHT_IN,
     height_scale: float | None = None,
-    square_width_frac: float = 0.28,
-    separator_gap_above: float = 0.20,
+    square_width_frac: float = 0.20,
+    panel_gap: float = DEFAULT_PANEL_GAP_IN,
+    legend_margin: float = DEFAULT_LEGEND_MARGIN_IN,
+    separator_gap_above: float = 0.29,
     separator_gap_below: float = 0.20,
 ) -> dict[str, float]:
     if not 0.12 <= square_width_frac <= 0.40:
         raise ValueError("--square-width-frac must be between 0.12 and 0.40")
     if separator_gap_above < 0.0 or separator_gap_below < 0.0:
         raise ValueError("separator gaps must be non-negative")
+    if panel_gap < 0.0:
+        raise ValueError("--panel-gap must be non-negative")
+    if legend_margin < 0.0:
+        raise ValueError("--legend-margin must be non-negative")
 
     fig_width = TEXTWIDTH_IN
     left = 0.43
     right = 0.06
-    col_gap = 0.34
+    col_gap = panel_gap
     available_width = fig_width - left - right
     square_width = available_width * square_width_frac
     top_bar_width = available_width - square_width - col_gap
-    bottom_bar_width = available_width - 2.0 * square_width - 2.0 * col_gap
+    bottom_square_count = 3.0
+    bottom_bar_width = (
+        available_width
+        - bottom_square_count * square_width
+        - bottom_square_count * col_gap
+    )
     if bottom_bar_width <= 0.65:
         raise ValueError(
-            "--square-width-frac leaves too little room for the bottom bar panel"
+            "--square-width-frac leaves too little room for the bottom bar panel "
+            "after the three bottom-row square panels"
         )
 
     top_margin = 0.06
     row_gap = separator_gap_above + separator_gap_below
-    legend_margin = 0.56
-    separator_side_inset = left - 0.15
-    min_height = top_margin + square_width + row_gap + square_width + legend_margin
-    fig_height = fig_width * height_scale if height_scale is not None else min_height
-    fig_height = max(fig_height, min_height)
+    separator_side_inset = left - 0.3
+    fixed_height = top_margin + row_gap + square_width + legend_margin
+    natural_height = fixed_height + square_width
+    fig_height = (
+        fig_width * height_scale
+        if height_scale is not None
+        else figure_height
+    )
+    if fig_height is None:
+        fig_height = natural_height
+    top_row_height = fig_height - fixed_height
+    if top_row_height <= 0.0:
+        raise ValueError(
+            "Requested figure height leaves no room for the top row: "
+            f"figure height={fig_height:.3f} in, fixed bottom/margins="
+            f"{fixed_height:.3f} in."
+        )
     y_bottom = legend_margin
     y_separator = y_bottom + square_width + separator_gap_below
     y_top = y_separator + separator_gap_above
     return {
         "fig_width": fig_width,
         "fig_height": fig_height,
+        "top_row_height": top_row_height,
         "left": left,
         "right": right,
         "available_width": available_width,
@@ -1276,6 +1344,7 @@ def computed_layout(
         "top_bar_width": top_bar_width,
         "bottom_bar_width": bottom_bar_width,
         "col_gap": col_gap,
+        "legend_margin": legend_margin,
         "row_gap": row_gap,
         "separator_gap_above": separator_gap_above,
         "separator_gap_below": separator_gap_below,
@@ -1308,7 +1377,7 @@ def add_axes_inches(
 
 def add_row_separator(fig: plt.Figure, layout: dict[str, float]) -> None:
     y = layout["y_separator"]
-    x0 = layout["separator_side_inset"]
+    x0 = layout["separator_side_inset"] + 0.14
     x1 = layout["fig_width"] - layout["separator_side_inset"]
     line = plt.Line2D(
         [x0 / layout["fig_width"], x1 / layout["fig_width"]],
@@ -1322,6 +1391,10 @@ def add_row_separator(fig: plt.Figure, layout: dict[str, float]) -> None:
 
 
 def plot_complex_bulk_results(args: argparse.Namespace) -> None:
+    global LINE_PLOT_AXIS_LABELPAD, LINE_PLOT_LABEL_SIZE
+    LINE_PLOT_AXIS_LABELPAD = args.line_plot_axis_labelpad
+    LINE_PLOT_LABEL_SIZE = args.line_plot_label_size
+
     configure_matplotlib()
     llm_flower_static = load_summary_rows(args.llm_flower_static)
     llm_flower_closed_loop = load_summary_rows(args.llm_flower_closed_loop)
@@ -1394,23 +1467,28 @@ def plot_complex_bulk_results(args: argparse.Namespace) -> None:
     )
 
     layout = computed_layout(
-        args.height_scale,
-        args.square_width_frac,
-        args.separator_gap_above,
-        args.separator_gap_below,
+        figure_height=args.figure_height,
+        height_scale=args.height_scale,
+        square_width_frac=args.square_width_frac,
+        panel_gap=args.panel_gap,
+        legend_margin=args.legend_margin,
+        separator_gap_above=args.separator_gap_above,
+        separator_gap_below=args.separator_gap_below,
     )
     fig = plt.figure(
         figsize=(layout["fig_width"], layout["fig_height"]),
         constrained_layout=False,
     )
     square_width = layout["square_width"]
+    top_row_height = layout["top_row_height"]
     col_gap = layout["col_gap"]
     x0 = layout["left"]
     top_bar_width = layout["top_bar_width"]
     bottom_bar_width = layout["bottom_bar_width"]
     x_time = x0 + top_bar_width + col_gap
-    x_danger = x0 + bottom_bar_width + col_gap
-    x_trace = x_danger + square_width + col_gap
+    x_region = x0 + bottom_bar_width + col_gap
+    x_angle_metric = x_region + square_width + col_gap
+    x_gripper_metric = x_angle_metric + square_width + col_gap
     bar_width_in = min(
         fitted_bar_width(top_bar_width, len(LIVENESS_GROUPS), len(methods)),
         fitted_bar_width(bottom_bar_width, len(SAFETY_GROUPS), len(safety_methods)),
@@ -1422,7 +1500,7 @@ def plot_complex_bulk_results(args: argparse.Namespace) -> None:
         x0,
         layout["y_top"],
         top_bar_width,
-        square_width,
+        top_row_height,
     )
     ax_time = add_axes_inches(
         fig,
@@ -1430,7 +1508,7 @@ def plot_complex_bulk_results(args: argparse.Namespace) -> None:
         x_time,
         layout["y_top"],
         square_width,
-        square_width,
+        top_row_height,
     )
     ax_safety = add_axes_inches(
         fig,
@@ -1443,29 +1521,26 @@ def plot_complex_bulk_results(args: argparse.Namespace) -> None:
     ax_danger = add_axes_inches(
         fig,
         layout,
-        x_danger,
+        x_region,
         layout["y_bottom"],
         square_width,
         square_width,
-    )
-    trace_gap = 0.08
-    trace_height = (square_width - trace_gap) / 2.0
-    ax_gripper = add_axes_inches(
-        fig,
-        layout,
-        x_trace,
-        layout["y_bottom"],
-        square_width,
-        trace_height,
     )
     ax_angle = add_axes_inches(
         fig,
         layout,
-        x_trace,
-        layout["y_bottom"] + trace_height + trace_gap,
+        x_angle_metric,
+        layout["y_bottom"],
         square_width,
-        trace_height,
-        sharex=ax_gripper,
+        square_width,
+    )
+    ax_gripper = add_axes_inches(
+        fig,
+        layout,
+        x_gripper_metric,
+        layout["y_bottom"],
+        square_width,
+        square_width,
     )
     add_row_separator(fig, layout)
 
@@ -1497,6 +1572,7 @@ def plot_complex_bulk_results(args: argparse.Namespace) -> None:
         None,
         args.safety_region_rollouts,
         args.init_pos_label_idx,
+        args.safety_region_label_font_size,
     )
     plot_trace_timeseries(
         ax_angle,
@@ -1675,36 +1751,85 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Output filename stem for PNG/PDF and data CSV.",
     )
     parser.add_argument(
+        "--figure-height",
+        type=float,
+        default=DEFAULT_FIG_HEIGHT_IN,
+        help=(
+            "Nominal figure height in inches. The bottom row keeps the square "
+            "panel height; the top row uses the remaining height."
+        ),
+    )
+    parser.add_argument(
         "--height-scale",
         type=float,
         default=None,
         help=(
-            "Optional figure height as a fraction of the LaTeX text width. "
-            "By default the script computes the minimum height needed for "
-            "the square panel width."
+            "Optional figure height as a fraction of the LaTeX text width; "
+            "overrides --figure-height when provided."
         ),
     )
     parser.add_argument(
         "--square-width-frac",
         type=float,
-        default=0.25,
+        default=0.19,
         help=(
             "Width of each square panel as a fraction of the usable row width. "
             "The top bar panel gets the remaining width after one square; "
-            "the bottom bar panel gets the remaining width after two squares."
+            "the bottom bar panel gets the remaining width after three squares."
         ),
+    )
+    parser.add_argument(
+        "--panel-gap",
+        type=float,
+        default=DEFAULT_PANEL_GAP_IN,
+        help="Horizontal gap in inches between adjacent panels.",
+    )
+    parser.add_argument(
+        "--legend-margin",
+        type=float,
+        default=DEFAULT_LEGEND_MARGIN_IN,
+        help=(
+            "Vertical space in inches reserved below the bottom row for the "
+            "legend. Smaller values move the bottom row closer to the legend."
+        ),
+    )
+    parser.add_argument(
+        "--line-plot-axis-labelpad",
+        "--line-plot-y-axis-labelpad",
+        "--y-axis-labelpad",
+        dest="line_plot_axis_labelpad",
+        type=float,
+        default=DEFAULT_LINE_PLOT_AXIS_LABELPAD,
+        help=(
+            "Padding in points between line-plot axis labels and their tick "
+            "labels. Smaller or negative values move labels closer to the axis."
+        ),
+    )
+    parser.add_argument(
+        "--line-plot-label-size",
+        "--line-plot-y-label-size",
+        dest="line_plot_label_size",
+        type=float,
+        default=DEFAULT_LINE_PLOT_LABEL_SIZE,
+        help="Font size for x/y labels on the inference, angle, and gripper plots.",
     )
     parser.add_argument(
         "--separator-gap-above",
         type=float,
-        default=0.29,
+        default=0.23,
         help="Vertical space in inches between the top row and the separator.",
     )
     parser.add_argument(
         "--separator-gap-below",
         type=float,
-        default=0.20,
+        default=0.17,
         help="Vertical space in inches between the separator and the bottom row.",
+    )
+    parser.add_argument(
+        "--safety-region-label-font-size",
+        type=float,
+        default=SAFETY_REGION_LABEL_FONT_SIZE,
+        help="Font size for init_pos and switch_off labels in the safety-region panel.",
     )
     return parser
 

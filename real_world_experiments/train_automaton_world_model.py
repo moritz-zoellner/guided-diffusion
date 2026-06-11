@@ -63,6 +63,7 @@ def build_automaton_trajectories(hdf5_path, demo_keys, state_keys, action_key, l
                 config=label_config,
                 eef_quat_key=label_keys["eef_quat_key"],
                 gripper_width_key=label_keys["gripper_width_key"],
+                wrist_delta_key=label_keys.get("wrist_delta_key"),
             )
             if not (len(states_all) == len(actions_all) == len(labels_all)):
                 raise ValueError(f"{demo_key}: state/action/label lengths do not align")
@@ -254,6 +255,7 @@ def main():
     parser.add_argument("--label-config", type=Path, default=None)
     parser.add_argument("--eef-quat-key", default="eef_quat_wxyz")
     parser.add_argument("--gripper-width-key", default="gripper_width")
+    parser.add_argument("--wrist-delta-key", default="wrist_3_delta")
     parser.add_argument("--split", choices=["mask", "random"], default="mask")
     parser.add_argument("--train-mask", default="train")
     parser.add_argument("--val-mask", default="valid")
@@ -281,6 +283,7 @@ def main():
     label_keys = {
         "eef_quat_key": args.eef_quat_key,
         "gripper_width_key": args.gripper_width_key,
+        "wrist_delta_key": args.wrist_delta_key,
     }
     all_keys = get_demo_keys(args.dataset)
     if args.max_demos is not None:

@@ -1,0 +1,24 @@
+{
+  "metric_name": "max_can_angle_until_eef_x_gate",
+  "description": "Object-upright success for the Cheez-It rzz-hold experiment.",
+  "gate": {
+    "signal": "eef_pos[0]",
+    "condition": "x <= gate_x",
+    "gate_x": -0.6
+  },
+  "angle": {
+    "signal": "rzz",
+    "definition": "rzz = world z dot object z, reconstructed from cheezit_rot6d",
+    "angle_deg": "acos(clamp(rzz, -1, 1)) * 180/pi"
+  },
+  "window": {
+    "start": "first can_grabbed label flip to 1",
+    "end": "first post-grasp timestep where eef_pos[0] <= gate_x",
+    "aggregation": "max angle_deg over the inclusive window"
+  },
+  "success": {
+    "condition": "max_angle_deg_until_gate <= threshold_deg",
+    "threshold_deg": 7.5
+  },
+  "missing_gate_policy": "A rollout that never reaches the gate is not counted as angle-success."
+}

@@ -26,7 +26,7 @@ import numpy as np
 DEFAULT_STATE_KEYS = (
     "eef_pos",
     "eef_rot6d",
-    "gripper_width",
+    "gripper_binary",
     "cheezit_pos",
     "cheezit_rot6d",
 )
@@ -37,6 +37,7 @@ DEFAULT_SOURCE_DIRS = (
     Path("/home/moritz/src/ros-ws/saved_data/20260513_015147"),
 )
 DEFAULT_OUTPUT_PATH = Path("data/real_world/cheezit_pouring.hdf5")
+DEFAULT_WRIST_JOINT_NAME = "wrist_3_joint"
 
 
 def demo_sort_key(name: str) -> int:
@@ -305,13 +306,41 @@ def _gripper_binary(gripper_pos: np.ndarray, gripper_mid: float) -> np.ndarray:
 
 def _episode_length(episode: dict) -> int:
     lengths = []
-    for key in ["ee_pos", "ee_quat_wxyz", "gripper_pos", "action", "obj_pose_4x4_world"]:
+    required_keys = ["ee_pos", "ee_quat_wxyz", "gripper_pos", "action", "obj_pose_4x4_world", "q"]
+    for key in required_keys:
         if key not in episode:
             raise KeyError(f"Episode missing required key: {key}")
         lengths.append(len(episode[key]))
     if len(set(lengths)) != 1:
-        raise ValueError(f"Episode arrays have inconsistent lengths: {dict(zip(['ee_pos','ee_quat_wxyz','gripper_pos','action','obj_pose_4x4_world'], lengths))}")
+        raise ValueError(f"Episode arrays have inconsistent lengths: {dict(zip(required_keys, lengths))}")
     return lengths[0]
+
+
+def _decode_joint_name(name: object) -> str:
+    if isinstance(name, bytes):
+        return name.decode("utf-8")
+    return str(name)
+
+
+def _joint_index(episode: dict, joint_name: str) -> int:
+    if "joint_names" not in episode:
+        raise KeyError("Episode missing required key: joint_names")
+    names = [_decode_joint_name(name) for name in episode["joint_names"]]
+    try:
+        return names.index(joint_name)
+    except ValueError as exc:
+        raise KeyError(f"Joint {joint_name!r} not found in episode joint_names={names}") from exc
+
+
+def _wrist_joint_arrays(episode: dict, joint_name: str) -> tuple[np.ndarray, np.ndarray]:
+    q = np.asarray(episode["q"], dtype=np.float32)
+    if q.ndim != 2:
+        raise ValueError(f"Expected q to have shape (T, n_joints), got {q.shape}")
+    joint_idx = _joint_index(episode, joint_name)
+    wrist = q[:, joint_idx].astype(np.float32)
+    wrist_unwrapped = np.unwrap(wrist.astype(np.float64)).astype(np.float32)
+    wrist_delta = (wrist_unwrapped - wrist_unwrapped[0]).astype(np.float32)
+    return wrist, wrist_delta
 
 
 def _true_runs(values: np.ndarray) -> list[tuple[int, int]]:
@@ -392,6 +421,7 @@ def _compact_episode_arrays(
     eef_pos = _as_float32(episode["ee_pos"])
     eef_quat_wxyz = normalize_quat_wxyz(episode["ee_quat_wxyz"])
     gripper_raw = np.asarray(episode["gripper_pos"], dtype=np.float32)
+    wrist_joint, wrist_delta = _wrist_joint_arrays(episode, DEFAULT_WRIST_JOINT_NAME)
     original_actions = _synthesized_pose_actions(eef_pos, eef_quat_wxyz, gripper_raw, gripper_mid)
     original_gripper_binary = _gripper_binary(gripper_raw, gripper_mid)
 
@@ -507,11 +537,15 @@ def _compact_episode_arrays(
         eef_pos = eef_pos[keep_indices]
         eef_quat_wxyz = eef_quat_wxyz[keep_indices]
         gripper_raw = gripper_raw[keep_indices]
+        wrist_joint = wrist_joint[keep_indices]
+        wrist_delta = wrist_delta[keep_indices]
 
     eef_quat_xyzw = quat_wxyz_to_xyzw(eef_quat_wxyz)
     eef_rot6d = quat_wxyz_to_rot6d(eef_quat_wxyz)
     gripper = _column(gripper_raw)
     gripper_binary = _column(_gripper_binary(gripper_raw, gripper_mid))
+    wrist_joint = _column(wrist_joint)
+    wrist_delta = _column(wrist_delta)
 
     obj_pose_world = np.asarray(episode["obj_pose_4x4_world"], dtype=np.float32)
     if condense_noop:
@@ -545,6 +579,8 @@ def _compact_episode_arrays(
         "obs/eef_rot6d": eef_rot6d,
         "obs/gripper_width": gripper,
         "obs/gripper_binary": gripper_binary,
+        "obs/wrist_3_joint": wrist_joint,
+        "obs/wrist_3_delta": wrist_delta,
         "obs/cheezit_pos": obj_pos,
         "obs/cheezit_quat_wxyz": obj_quat_wxyz,
         "obs/cheezit_quat": obj_quat_xyzw,
@@ -738,6 +774,12 @@ def convert_saved_episodes_to_hdf5(
                 "cheezit_rot6d",
             ],
             "obs_keys_for_world_model": list(DEFAULT_STATE_KEYS),
+            "label_keys": {
+                "gripper_width_key": "gripper_width",
+                "eef_quat_key": "eef_quat_wxyz",
+                "wrist_delta_key": "wrist_3_delta",
+                "wrist_joint_name": DEFAULT_WRIST_JOINT_NAME,
+            },
             "action_key": DEFAULT_ACTION_KEY,
             "action_dim": int(demo_records[0]["action_dim"]) if demo_records else None,
             "action_representation": [

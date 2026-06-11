@@ -68,6 +68,7 @@ LATEX_TEXTWIDTH_PT = 397.48499
 PT_PER_IN = 72.27
 TEXTWIDTH_IN = LATEX_TEXTWIDTH_PT / PT_PER_IN
 FIG_DPI = 300
+DEFAULT_HEIGHT_SCALE = 0.20447  # Tight-cropped PDF height is 1.25 in.
 
 OUR_BLUE = "#275fca"
 AXIS_GRAY = "#8a8a8a"
@@ -359,7 +360,7 @@ def plot_rates(rates, output_stem, height_scale):
             if task == "average":
                 ax.text(
                     pos,
-                    min(value + 0.025, 0.995),
+                    min(value + 0.008, 0.995),
                     f"{value:.1f}",
                     ha="center",
                     va="bottom",
@@ -402,17 +403,23 @@ def plot_rates(rates, output_stem, height_scale):
         )
         for method in METHOD_ORDER
     ]
-    ax.legend(
+    legend = ax.legend(
         handles=legend_handles,
         loc="upper center",
         bbox_to_anchor=(0.5, -0.22),
         ncol=len(METHOD_ORDER),
-        frameon=False,
-        handlelength=1.25,
+        frameon=True,
+        fancybox=True,
+        framealpha=1.0,
+        edgecolor="#d4d4d4",
+        facecolor="white",
+        handlelength=1.8,
         handleheight=0.75,
-        columnspacing=1.35,
+        columnspacing=1.2,
+        borderpad=0.35,
         borderaxespad=0.0,
     )
+    legend.get_frame().set_linewidth(0.45)
 
     fig.subplots_adjust(left=0.075, right=0.995, top=0.985, bottom=0.30)
     fig.text(
@@ -475,8 +482,11 @@ def build_arg_parser():
     parser.add_argument(
         "--height-scale",
         type=float,
-        default=0.27,
-        help="Figure height as a fraction of the LaTeX text width.",
+        default=DEFAULT_HEIGHT_SCALE,
+        help=(
+            "Figure height as a fraction of the LaTeX text width. The default "
+            "exports a 1.25 in tall tight-cropped PDF."
+        ),
     )
     return parser
 

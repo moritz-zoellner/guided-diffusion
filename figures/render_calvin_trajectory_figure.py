@@ -50,6 +50,10 @@ ORDERED_STAGE_DIR = REPO_ROOT / (
     "outputs/calvin/paper_stls/F_drawer_after_button_switch/ordered_stage_20260507_191217/"
     "ordered_button_on_and_switch_on_then_drawer_open_start02_x0p10_ym0p20_seed_000"
 )
+CYCLIC_ROLLOUT_DIR = REPO_ROOT / (
+    "outputs/calvin/paper_stls/G_cyclic_drawer_switch/20260521_011654/"
+    "cycle_drawer_open_then_switch_on_then_button_pressed_then_drawer_closed_then_switch_off_then_button_pressed_seed_001"
+)
 BASE_DIVERSE_BATCHES = [
     (
         "button",
@@ -217,6 +221,7 @@ def parse_driver_args() -> argparse.Namespace:
             "flower",
             "base-diverse",
             "ordered-stage",
+            "cyclic",
             "complex-region",
             "complex-chained",
             "complex-conditional",
@@ -667,6 +672,25 @@ def consolidated_base_prior_final_scene(trace_paths_by_label: dict[str, list[Pat
     return scene
 
 
+def closed_drawer_lights_on_scene(trace):
+    import numpy as np
+
+    scene_states = np.asarray(trace["scene_states"], dtype=np.float32)
+    scene = scene_states[0].copy()
+    scene[SCENE_DRAWER_INDEX] = 0.0
+    both_lights_on = np.flatnonzero(
+        (scene_states[:, SCENE_LIGHTBULB_INDEX] > 0.5)
+        & (scene_states[:, SCENE_LED_INDEX] > 0.5)
+    )
+    if len(both_lights_on):
+        source = scene_states[int(both_lights_on[0])]
+        scene[SCENE_BUTTON_INDEX] = source[SCENE_BUTTON_INDEX]
+        scene[SCENE_SWITCH_INDEX] = source[SCENE_SWITCH_INDEX]
+    scene[SCENE_LIGHTBULB_INDEX] = 1.0
+    scene[SCENE_LED_INDEX] = 1.0
+    return scene
+
+
 def rollout_trace_path(rollout_dir: Path) -> Path:
     return rollout_dir.expanduser().resolve() / "rollout_trace.npz"
 
@@ -915,6 +939,29 @@ def build_plot_spec(args: argparse.Namespace) -> dict:
                 }
             ],
             "safety_boxes": [],
+        }
+
+    if args.figure_preset == "cyclic":
+        trace_path = rollout_trace_path(CYCLIC_ROLLOUT_DIR)
+        trace, points = load_trace_points(trace_path)
+        color = method_color()
+        events = summary_target_events_for_trace(trace_path, points, colors=[color] * 64) or []
+        return {
+            "primary_trace_path": trace_path,
+            "trajectories": [
+                {
+                    "name": "cyclic_drawer_switch_button",
+                    "trace_path": str(trace_path),
+                    "points": points.astype(float).tolist(),
+                    "color": color,
+                    "events": events,
+                }
+            ],
+            "safety_boxes": [],
+            "scene_state_index": 0,
+            "scene_state_override": closed_drawer_lights_on_scene(trace).astype(float).tolist(),
+            "robot_state_index": 0,
+            "apply_drawer_close_adjust": False,
         }
 
     rollout_dir = args.rollout_dir.expanduser().resolve()

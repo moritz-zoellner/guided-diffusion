@@ -30,7 +30,7 @@ LOCAL_BLENDER = REPO_ROOT / "tools/blender-4.2.0-linux-x64/blender"
 
 # Layout knobs. These can also be overridden from the command line.
 PANEL_COLUMN_WSPACE = 0.075
-PANEL_SQUARE_SCALE = 0.80
+PANEL_SQUARE_SCALE = 0.50
 ROW_SEPARATOR_GAP_ABOVE = 0.10
 ROW_SEPARATOR_GAP_BELOW = 0.12
 ROW_SEPARATOR_SIDE_INSET = 0.02
@@ -101,7 +101,12 @@ PANEL_ROWS = [
     ],
     [
         {
-            "placeholder": True,
+            "path": "outputs/paper_plots/cyclic_repetition/cyclic_repetition_v1.png",
+            "render": {
+                "figure_preset": "cyclic",
+                "output_dir": "outputs/paper_plots/cyclic_repetition",
+                "blend_path": "outputs/paper_plots/editable_blender_panels/cyclic.blend",
+            },
             "title": "Cyclic Repetition",
             "subtitle": "Repeatedly pick up the Cheez-Its, then pour in the left and the right bowl, and then put them down again.",
         },
